@@ -1,0 +1,19 @@
+{
+  "name": "miru-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local web UI for parallel Pi agents backed by zellij",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node dist/server/main.js"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.21.0",
+    "xterm": "^5.3.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}
