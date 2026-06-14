@@ -49,12 +49,20 @@ export async function validateDirectory(path: string): Promise<void> {
   }
 }
 
+export const MIRU_AGENT_SESSION_PREFIX = 'miru-agent-';
+
 export function makeAgentId(): string {
   return randomUUID().slice(0, 8);
 }
 
 export function makeSessionName(agentId: string): string {
-  return `miru-agent-${agentId}`;
+  return `${MIRU_AGENT_SESSION_PREFIX}${agentId}`;
+}
+
+export function parseAgentIdFromSessionName(sessionName: string): string | undefined {
+  if (!sessionName.startsWith(MIRU_AGENT_SESSION_PREFIX)) return undefined;
+  const id = sessionName.slice(MIRU_AGENT_SESSION_PREFIX.length).trim();
+  return id || undefined;
 }
 
 export function folderTagFromCwd(cwd: string): string {

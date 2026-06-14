@@ -3,8 +3,14 @@ import { resolve } from 'node:path';
 import * as pty from 'node-pty';
 import type { CreateAgentInput, AgentSummary } from '../shared/protocol';
 import { INITIAL_COLS, INITIAL_ROWS, TERMINAL_BUFFER_LIMIT } from './config';
-import { createZellijSession, killZellijSession } from './zellij';
-import { defaultAgentName, folderTagFromCwd, makeAgentId, makeSessionName, validateDirectory } from './utils';
+import { createZellijSession, discoverMiruSessions, type DiscoveredMiruSession, killZellijSession } from './zellij';
+import {
+  defaultAgentName,
+  folderTagFromCwd,
+  makeAgentId,
+  makeSessionName,
+  validateDirectory,
+} from './utils';
 
 interface AgentRecord {
   id: string;
@@ -19,6 +25,7 @@ interface AgentRecord {
   terminal: pty.IPty;
   buffer: string;
   deleting: boolean;
+  detaching: boolean;
 }
 
 export interface AgentsEvents {
@@ -45,6 +52,19 @@ export class AgentManager extends EventEmitter {
     return agent.buffer;
   }
 
+  async restoreExisting(): Promise<void> {
+    const discovered = await discoverMiruSessions();
+    let index = 0;
+
+    for (const session of discovered) {
+      if (this.agents.has(session.agentId)) continue;
+      await this.attachDiscoveredSession(session, Date.now() + index);
+      index += 1;
+    }
+
+    this.emitAgentsChanged();
+  }
+
   async create(input: CreateAgentInput): Promise<AgentSummary> {
     const cwd = resolve(input.cwd.trim());
     await validateDirectory(cwd);
@@ -52,56 +72,21 @@ export class AgentManager extends EventEmitter {
     const id = makeAgentId();
     const name = (input.name?.trim() || defaultAgentName(cwd)).slice(0, 80);
     const sessionName = makeSessionName(id);
-    const now = Date.now();
 
     await createZellijSession(sessionName, cwd, name);
 
-    const terminal = pty.spawn('zellij', ['attach', sessionName], {
-      name: 'xterm-256color',
-      cols: INITIAL_COLS,
-      rows: INITIAL_ROWS,
-      cwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
+    const agent = await this.attachDiscoveredSession(
+      {
+        agentId: id,
+        sessionName,
+        name,
+        cwd,
+        lastExitCode: null,
+        running: true,
       },
-    });
+      Date.now(),
+    );
 
-    const agent: AgentRecord = {
-      id,
-      name,
-      cwd,
-      folderTag: folderTagFromCwd(cwd),
-      sessionName,
-      status: 'running',
-      createdAt: now,
-      updatedAt: now,
-      lastExitCode: null,
-      terminal,
-      buffer: '',
-      deleting: false,
-    };
-
-    terminal.onData((data) => {
-      agent.updatedAt = Date.now();
-      agent.buffer += data;
-      if (agent.buffer.length > TERMINAL_BUFFER_LIMIT) {
-        agent.buffer = agent.buffer.slice(agent.buffer.length - TERMINAL_BUFFER_LIMIT);
-      }
-      this.emit('terminalData', agent.id, data);
-    });
-
-    terminal.onExit(({ exitCode }) => {
-      agent.updatedAt = Date.now();
-      agent.lastExitCode = exitCode;
-      if (!agent.deleting) {
-        agent.status = exitCode === 0 ? 'exited' : 'error';
-      }
-      this.emit('terminalExit', agent.id, exitCode);
-      this.emitAgentsChanged();
-    });
-
-    this.agents.set(id, agent);
     this.emitAgentsChanged();
     return this.toSummary(agent);
   }
@@ -135,8 +120,70 @@ export class AgentManager extends EventEmitter {
     this.emitAgentsChanged();
   }
 
-  async dispose(): Promise<void> {
-    await Promise.all(Array.from(this.agents.keys()).map((agentId) => this.delete(agentId).catch(() => undefined)));
+  async detachAll(): Promise<void> {
+    await Promise.all(
+      Array.from(this.agents.values()).map(async (agent) => {
+        agent.detaching = true;
+        try {
+          agent.terminal.kill();
+        } catch {
+          // ignore
+        }
+      }),
+    );
+  }
+
+  private async attachDiscoveredSession(session: DiscoveredMiruSession, createdAt: number): Promise<AgentRecord> {
+    const terminal = pty.spawn('zellij', ['attach', session.sessionName], {
+      name: 'xterm-256color',
+      cols: INITIAL_COLS,
+      rows: INITIAL_ROWS,
+      cwd: session.cwd,
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+      },
+    });
+
+    const agent: AgentRecord = {
+      id: session.agentId,
+      name: session.name,
+      cwd: session.cwd,
+      folderTag: folderTagFromCwd(session.cwd),
+      sessionName: session.sessionName,
+      status: session.running ? 'running' : session.lastExitCode === 0 ? 'exited' : 'error',
+      createdAt,
+      updatedAt: Date.now(),
+      lastExitCode: session.lastExitCode,
+      terminal,
+      buffer: '',
+      deleting: false,
+      detaching: false,
+    };
+
+    terminal.onData((data) => {
+      agent.updatedAt = Date.now();
+      agent.buffer += data;
+      if (agent.buffer.length > TERMINAL_BUFFER_LIMIT) {
+        agent.buffer = agent.buffer.slice(agent.buffer.length - TERMINAL_BUFFER_LIMIT);
+      }
+      this.emit('terminalData', agent.id, data);
+    });
+
+    terminal.onExit(({ exitCode }) => {
+      agent.updatedAt = Date.now();
+      agent.lastExitCode = exitCode;
+      if (!agent.deleting && !agent.detaching) {
+        agent.status = exitCode === 0 ? 'exited' : 'error';
+      }
+      this.emit('terminalExit', agent.id, exitCode);
+      if (!agent.detaching) {
+        this.emitAgentsChanged();
+      }
+    });
+
+    this.agents.set(agent.id, agent);
+    return agent;
   }
 
   private requireAgent(agentId: string): AgentRecord {

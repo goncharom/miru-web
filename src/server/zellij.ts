@@ -4,7 +4,26 @@ import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PI_COMMAND, USER_SHELL } from './config';
-import { delay } from './utils';
+import { delay, parseAgentIdFromSessionName } from './utils';
+
+interface ZellijPaneInfo {
+  id: number;
+  is_plugin: boolean;
+  title: string;
+  exited: boolean;
+  exit_status: number | null;
+  tab_name: string;
+  pane_cwd?: string;
+}
+
+export interface DiscoveredMiruSession {
+  agentId: string;
+  sessionName: string;
+  name: string;
+  cwd: string;
+  lastExitCode: number | null;
+  running: boolean;
+}
 
 const execFileAsync = promisify(execFile);
 let resolvedPiExecutablePromise: Promise<string> | undefined;
@@ -25,6 +44,8 @@ export async function createZellijSession(sessionName: string, cwd: string, tabN
     cwd,
     '-n',
     tabName,
+    '-l',
+    'compact',
     '--',
     ...shellArgs,
   ]);
@@ -43,6 +64,50 @@ export async function killZellijSession(sessionName: string): Promise<void> {
     await execZellij(['kill-session', sessionName]);
   } catch {
     // Ignore missing sessions during cleanup.
+  }
+}
+
+export async function discoverMiruSessions(): Promise<DiscoveredMiruSession[]> {
+  const stdout = await execZellij(['list-sessions', '--short']);
+  const sessionNames = stdout
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const discovered: DiscoveredMiruSession[] = [];
+
+  for (const sessionName of sessionNames) {
+    const agentId = parseAgentIdFromSessionName(sessionName);
+    if (!agentId) continue;
+
+    const session = await inspectMiruSession(sessionName, agentId);
+    if (session) {
+      discovered.push(session);
+    }
+  }
+
+  return discovered;
+}
+
+async function inspectMiruSession(sessionName: string, agentId: string): Promise<DiscoveredMiruSession | undefined> {
+  try {
+    const output = await execZellij(['--session', sessionName, 'action', 'list-panes', '--json', '-a', '-c', '-s', '-t']);
+    const panes = JSON.parse(output) as ZellijPaneInfo[];
+    const mainPane = panes.find((pane) => !pane.is_plugin && typeof pane.pane_cwd === 'string');
+    if (!mainPane?.pane_cwd) {
+      return undefined;
+    }
+
+    return {
+      agentId,
+      sessionName,
+      name: mainPane.tab_name || sessionName,
+      cwd: mainPane.pane_cwd,
+      lastExitCode: mainPane.exit_status ?? null,
+      running: !mainPane.exited,
+    };
+  } catch {
+    return undefined;
   }
 }
 

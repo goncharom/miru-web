@@ -72,6 +72,11 @@ export type ClientEvent =
       data: string;
     }
   | {
+      type: 'terminal_binary';
+      agentId: string;
+      dataBase64: string;
+    }
+  | {
       type: 'terminal_resize';
       agentId: string;
       cols: number;

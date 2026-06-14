@@ -238,12 +238,21 @@ input[type="text"] {
   min-width: 0;
 }
 
-.agent-name,
-.artifact-path {
+.artifact-name {
+  align-items: flex-start;
+}
+
+.agent-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.artifact-path {
+  font-size: 12px;
+  line-height: 1.25;
+  word-break: break-word;
 }
 
 .agent-subline,
@@ -417,26 +426,29 @@ input[type="text"] {
 }
 
 .artifact-row {
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .artifact-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
+  margin-left: 24px;
 }
 
 .artifact-actions a,
 .artifact-actions button {
-  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
 }
 
 .artifact-actions a {
   display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
   background: var(--surface-2);
   color: var(--fg);
   text-decoration: none;

@@ -9,6 +9,8 @@ Local web UI for running multiple Pi agents in parallel.
 - one focused terminal at a time with `xterm.js`
 - one `zellij` session per agent
 - Pi launched inside each agent session
+- existing `miru-agent-*` zellij sessions are rediscovered on server startup
+- server shutdown detaches from agent sessions but does not kill them
 - left agent list
 - right `.miru` artifact pane per selected agent
 - image upload to `.miru/pasted/`

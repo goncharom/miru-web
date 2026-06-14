@@ -60,10 +60,6 @@ agentManager.on('terminalExit', (agentId, exitCode) => {
   broadcast({ type: 'terminal_exit', agentId, exitCode });
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`${APP_NAME} listening on http://${HOST}:${PORT}`);
-});
-
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
@@ -74,14 +70,29 @@ async function shutdown(): Promise<void> {
   isShuttingDown = true;
   wss.close();
   server.close();
-  await agentManager.dispose();
+  await agentManager.detachAll();
   process.exit(0);
+}
+
+void bootstrap().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
+
+async function bootstrap(): Promise<void> {
+  await agentManager.restoreExisting();
+  server.listen(PORT, HOST, () => {
+    console.log(`${APP_NAME} listening on http://${HOST}:${PORT}`);
+  });
 }
 
 function handleClientEvent(event: ClientEvent): void {
   switch (event.type) {
     case 'terminal_input':
       agentManager.write(event.agentId, event.data);
+      return;
+    case 'terminal_binary':
+      agentManager.write(event.agentId, Buffer.from(event.dataBase64, 'base64').toString('latin1'));
       return;
     case 'terminal_resize':
       agentManager.resize(event.agentId, event.cols, event.rows);

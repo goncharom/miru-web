@@ -16,15 +16,13 @@
     <aside id="left-pane" class="pane pane-left">
       <div class="pane-header pane-header-left">
         <div class="pane-title">Agents</div>
-        <button id="show-create-agent" class="icon-button" type="button" title="New agent">+</button>
       </div>
 
-      <form id="create-agent-form" class="create-agent-form" hidden>
+      <form id="create-agent-form" class="create-agent-form">
         <input id="agent-cwd" type="text" name="cwd" placeholder="Folder path" autocomplete="off" spellcheck="false">
         <input id="agent-name" type="text" name="name" placeholder="Name (optional)" autocomplete="off" spellcheck="false">
         <div class="row-actions">
           <button class="primary-button" type="submit">Create</button>
-          <button id="cancel-create-agent" type="button">Cancel</button>
         </div>
         <div id="create-agent-error" class="form-error"></div>
       </form>
@@ -55,10 +53,6 @@
     <aside id="right-pane" class="pane pane-right">
       <div class="pane-header">
         <div class="pane-title">Artifacts</div>
-        <label class="checkbox-row">
-          <input id="html-only" type="checkbox">
-          <span>.html</span>
-        </label>
       </div>
 
       <div class="upload-panel">

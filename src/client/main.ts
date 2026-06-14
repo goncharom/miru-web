@@ -32,8 +32,6 @@ interface TerminalState {
 
 const shell = getElement<HTMLDivElement>('shell');
 const serverStatusEl = getElement<HTMLDivElement>('server-status');
-const showCreateAgentButton = getElement<HTMLButtonElement>('show-create-agent');
-const cancelCreateAgentButton = getElement<HTMLButtonElement>('cancel-create-agent');
 const createAgentForm = getElement<HTMLFormElement>('create-agent-form');
 const createAgentErrorEl = getElement<HTMLDivElement>('create-agent-error');
 const agentCwdInput = getElement<HTMLInputElement>('agent-cwd');
@@ -45,7 +43,6 @@ const selectedAgentStatusEl = getElement<HTMLDivElement>('selected-agent-status'
 const terminalStackEl = getElement<HTMLDivElement>('terminal-stack');
 const terminalEmptyEl = getElement<HTMLDivElement>('terminal-empty');
 const artifactListEl = getElement<HTMLDivElement>('artifact-list');
-const htmlOnlyCheckbox = getElement<HTMLInputElement>('html-only');
 const chooseImageButton = getElement<HTMLButtonElement>('choose-image');
 const imageInput = getElement<HTMLInputElement>('image-input');
 const pasteTarget = getElement<HTMLDivElement>('paste-target');
@@ -61,7 +58,6 @@ const toggleRightButton = getElement<HTMLButtonElement>('toggle-right');
 
 const layoutStorageKey = 'miru-web-layout';
 const selectedAgentStorageKey = 'miru-web-selected-agent';
-const htmlOnlyStorageKey = 'miru-web-html-only';
 
 const state: {
   agents: AgentSummary[];
@@ -92,7 +88,6 @@ const state: {
 };
 
 applyLayout();
-setHtmlOnly(window.localStorage.getItem(htmlOnlyStorageKey) === '1');
 attachUiEvents();
 connectWebSocket();
 window.setInterval(() => {
@@ -102,27 +97,9 @@ window.setInterval(() => {
 }, 2500);
 
 function attachUiEvents(): void {
-  showCreateAgentButton.addEventListener('click', () => {
-    createAgentForm.hidden = false;
-    createAgentErrorEl.textContent = '';
-    agentCwdInput.value = suggestedCwd();
-    agentNameInput.value = '';
-    agentCwdInput.focus();
-  });
-
-  cancelCreateAgentButton.addEventListener('click', () => {
-    createAgentForm.hidden = true;
-    createAgentErrorEl.textContent = '';
-  });
-
   createAgentForm.addEventListener('submit', (event) => {
     event.preventDefault();
     runTask(createAgent());
-  });
-
-  htmlOnlyCheckbox.addEventListener('change', () => {
-    window.localStorage.setItem(htmlOnlyStorageKey, htmlOnlyCheckbox.checked ? '1' : '0');
-    renderArtifacts();
   });
 
   chooseImageButton.addEventListener('click', () => {
@@ -308,7 +285,8 @@ async function createAgent(): Promise<void> {
     return;
   }
 
-  createAgentForm.hidden = true;
+  createAgentErrorEl.textContent = '';
+  agentNameInput.value = '';
   state.selectedAgentId = body.agent.id;
   persistSelectedAgent();
   state.activityAgentIds.delete(body.agent.id);
@@ -482,6 +460,9 @@ function ensureTerminalState(agentId: string): TerminalState {
   terminal.onData((data) => {
     sendClientEvent({ type: 'terminal_input', agentId, data });
   });
+  terminal.onBinary((data) => {
+    sendClientEvent({ type: 'terminal_binary', agentId, dataBase64: window.btoa(data) });
+  });
 
   const terminalState: TerminalState = {
     terminal,
@@ -601,7 +582,7 @@ function renderArtifacts(): void {
     return;
   }
 
-  const entries = htmlOnlyCheckbox.checked ? state.artifacts.filter((item) => item.kind === 'html') : state.artifacts;
+  const entries = state.artifacts;
   if (entries.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -850,10 +831,6 @@ async function copyText(text: string): Promise<boolean> {
     textarea.remove();
     return copied;
   }
-}
-
-function setHtmlOnly(value: boolean): void {
-  htmlOnlyCheckbox.checked = value;
 }
 
 function clamp(value: number, min: number, max: number): number {
