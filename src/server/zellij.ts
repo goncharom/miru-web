@@ -44,8 +44,6 @@ export async function createZellijSession(sessionName: string, cwd: string, tabN
     cwd,
     '-n',
     tabName,
-    '-l',
-    'compact',
     '--',
     ...shellArgs,
   ]);
