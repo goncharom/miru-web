@@ -12,6 +12,12 @@ import {
   validateDirectory,
 } from './utils';
 
+interface Osc52State {
+  inOsc: boolean;
+  oscData: string;
+  pendingEsc: boolean;
+}
+
 interface AgentRecord {
   id: string;
   name: string;
@@ -26,12 +32,14 @@ interface AgentRecord {
   buffer: string;
   deleting: boolean;
   detaching: boolean;
+  osc52: Osc52State;
 }
 
 export interface AgentsEvents {
   agentsChanged: (agents: AgentSummary[]) => void;
   terminalData: (agentId: string, data: string) => void;
   terminalExit: (agentId: string, exitCode: number | null) => void;
+  clipboardCopy: (agentId: string, text: string) => void;
 }
 
 export class AgentManager extends EventEmitter {
@@ -159,15 +167,26 @@ export class AgentManager extends EventEmitter {
       buffer: '',
       deleting: false,
       detaching: false,
+      osc52: {
+        inOsc: false,
+        oscData: '',
+        pendingEsc: false,
+      },
     };
 
     terminal.onData((data) => {
       agent.updatedAt = Date.now();
-      agent.buffer += data;
-      if (agent.buffer.length > TERMINAL_BUFFER_LIMIT) {
-        agent.buffer = agent.buffer.slice(agent.buffer.length - TERMINAL_BUFFER_LIMIT);
+      const processed = extractOsc52(agent.osc52, data);
+      if (processed.displayData) {
+        agent.buffer += processed.displayData;
+        if (agent.buffer.length > TERMINAL_BUFFER_LIMIT) {
+          agent.buffer = agent.buffer.slice(agent.buffer.length - TERMINAL_BUFFER_LIMIT);
+        }
+        this.emit('terminalData', agent.id, processed.displayData);
       }
-      this.emit('terminalData', agent.id, data);
+      for (const text of processed.clipboardTexts) {
+        this.emit('clipboardCopy', agent.id, text);
+      }
     });
 
     terminal.onExit(({ exitCode }) => {
@@ -210,5 +229,118 @@ export class AgentManager extends EventEmitter {
 
   private emitAgentsChanged(): void {
     this.emit('agentsChanged', this.list());
+  }
+}
+
+const OSC = ']';
+const BEL = '\x07';
+const ESC = '\x1b';
+const ST = '\x1b\\';
+const MAX_OSC52_BASE64_LENGTH = 1024 * 1024;
+
+function extractOsc52(state: Osc52State, chunk: string): { displayData: string; clipboardTexts: string[] } {
+  let displayData = '';
+  const clipboardTexts: string[] = [];
+  let index = 0;
+
+  if (state.pendingEsc) {
+    state.pendingEsc = false;
+    if (state.inOsc) {
+      if (chunk.startsWith('\\')) {
+        const completed = completeOsc(state, ST);
+        displayData += completed.displayData;
+        if (completed.clipboardText != null) clipboardTexts.push(completed.clipboardText);
+        index = 1;
+      } else {
+        state.oscData += ESC;
+      }
+    } else if (chunk.startsWith(OSC)) {
+      state.inOsc = true;
+      state.oscData = '';
+      index = 1;
+    } else {
+      displayData += ESC;
+    }
+  }
+
+  while (index < chunk.length) {
+    const char = chunk[index];
+
+    if (!state.inOsc) {
+      if (char === ESC) {
+        if (index + 1 >= chunk.length) {
+          state.pendingEsc = true;
+          break;
+        }
+        if (chunk[index + 1] === OSC) {
+          state.inOsc = true;
+          state.oscData = '';
+          index += 2;
+          continue;
+        }
+      }
+      displayData += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === BEL) {
+      const completed = completeOsc(state, BEL);
+      displayData += completed.displayData;
+      if (completed.clipboardText != null) clipboardTexts.push(completed.clipboardText);
+      index += 1;
+      continue;
+    }
+
+    if (char === ESC) {
+      if (index + 1 >= chunk.length) {
+        state.pendingEsc = true;
+        break;
+      }
+      if (chunk[index + 1] === '\\') {
+        const completed = completeOsc(state, ST);
+        displayData += completed.displayData;
+        if (completed.clipboardText != null) clipboardTexts.push(completed.clipboardText);
+        index += 2;
+        continue;
+      }
+    }
+
+    state.oscData += char;
+    index += 1;
+  }
+
+  return { displayData, clipboardTexts };
+}
+
+function completeOsc(state: Osc52State, terminator: string): { displayData: string; clipboardText?: string } {
+  const rawData = state.oscData;
+  state.inOsc = false;
+  state.oscData = '';
+
+  const firstSeparator = rawData.indexOf(';');
+  const secondSeparator = firstSeparator < 0 ? -1 : rawData.indexOf(';', firstSeparator + 1);
+  if (firstSeparator < 0 || secondSeparator < 0 || rawData.slice(0, firstSeparator) !== '52') {
+    return { displayData: `${ESC}${OSC}${rawData}${terminator}` };
+  }
+
+  const payload = rawData.slice(secondSeparator + 1);
+  if (payload === '?') {
+    return { displayData: '' };
+  }
+
+  const clipboardText = decodeOsc52Payload(payload);
+  return clipboardText == null ? { displayData: '' } : { displayData: '', clipboardText };
+}
+
+function decodeOsc52Payload(payload: string): string | null {
+  if (payload.length > MAX_OSC52_BASE64_LENGTH) {
+    return null;
+  }
+
+  try {
+    return Buffer.from(payload, 'base64').toString('utf8');
+  } catch {
+    return null;
   }
 }

@@ -60,6 +60,10 @@ agentManager.on('terminalExit', (agentId, exitCode) => {
   broadcast({ type: 'terminal_exit', agentId, exitCode });
 });
 
+agentManager.on('clipboardCopy', (agentId, text) => {
+  broadcast({ type: 'clipboard_copy', agentId, text });
+});
+
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 

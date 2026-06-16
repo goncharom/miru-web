@@ -63,6 +63,11 @@ export type ServerEvent =
       type: 'terminal_exit';
       agentId: string;
       exitCode: number | null;
+    }
+  | {
+      type: 'clipboard_copy';
+      agentId: string;
+      text: string;
     };
 
 export type ClientEvent =

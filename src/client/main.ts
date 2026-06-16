@@ -231,6 +231,11 @@ function handleServerEvent(event: ServerEvent): void {
         markAgentActivity(event.agentId);
       }
       return;
+    case 'clipboard_copy':
+      if (event.agentId === state.selectedAgentId) {
+        runTask(copyTerminalClipboard(event.text));
+      }
+      return;
   }
 }
 
@@ -839,6 +844,13 @@ function formatBytes(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function copyTerminalClipboard(text: string): Promise<void> {
+  const copied = await copyText(text);
+  if (!copied) {
+    console.warn('Could not copy terminal selection to clipboard.');
+  }
 }
 
 async function copyText(text: string): Promise<boolean> {
