@@ -461,10 +461,10 @@ function ensureTerminalState(agentId: string): TerminalState {
     fontSize: 13,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
     theme: {
-      background: '#0d1118',
-      foreground: '#e8edf6',
-      cursor: '#dce6ff',
-      selectionBackground: 'rgba(111, 137, 255, 0.25)',
+      background: '#000000',
+      foreground: '#ffffff',
+      cursor: '#ffffff',
+      selectionBackground: 'rgba(255, 255, 255, 0.25)',
     },
     scrollback: 10000,
     allowTransparency: false,
@@ -630,7 +630,7 @@ function renderArtifacts(): void {
 
     const meta = document.createElement('div');
     meta.className = 'artifact-meta';
-    meta.textContent = `${new Date(entry.mtimeMs).toLocaleString()} · ${formatBytes(entry.size)}`;
+    meta.textContent = new Date(entry.mtimeMs).toLocaleString();
 
     main.append(nameLine, meta);
 

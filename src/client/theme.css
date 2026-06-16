@@ -2,18 +2,18 @@
 
 :root {
   color-scheme: dark;
-  --bg: #0f1115;
-  --surface: #151922;
-  --surface-2: #10141b;
-  --surface-3: #0c1016;
-  --border: #232937;
-  --border-strong: #30384a;
-  --fg: #e8edf6;
-  --muted: #96a2b5;
-  --accent: #6f89ff;
+  --bg: #000;
+  --surface: #000;
+  --surface-2: #000;
+  --surface-3: #000;
+  --border: #fff;
+  --border-strong: #fff;
+  --fg: #fff;
+  --muted: #cfcfcf;
+  --accent: #fff;
   --danger: #ff7f8f;
   --success: #7ee4a6;
-  --splitter: #161b23;
+  --splitter: #000;
   --left-pane-width: 280px;
   --right-pane-width: 360px;
   --splitter-width: 12px;
@@ -52,7 +52,7 @@ button {
 }
 
 button:hover {
-  background: #161c27;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 button:disabled {
@@ -76,7 +76,7 @@ input[type="text"] {
   justify-content: space-between;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
-  background: #0c0f14;
+  background: #000;
 }
 
 .brand {
@@ -130,7 +130,7 @@ input[type="text"] {
 .pane-center {
   display: flex;
   flex-direction: column;
-  background: #0d1118;
+  background: #000;
 }
 
 .pane-header,
@@ -176,6 +176,7 @@ input[type="text"] {
 .row-actions {
   display: flex;
   gap: 6px;
+  justify-content: flex-end;
 }
 
 .compact-actions {
@@ -185,8 +186,20 @@ input[type="text"] {
 .primary-button {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0b1020;
+  color: #000;
   font-weight: 700;
+}
+
+.primary-button:hover {
+  background: #fff;
+}
+
+.create-agent-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .form-error {
@@ -207,8 +220,8 @@ input[type="text"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
 }
 
 .agent-row {
@@ -217,11 +230,11 @@ input[type="text"] {
 
 .agent-row:hover,
 .artifact-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .agent-row.selected {
-  background: rgba(111, 137, 255, 0.12);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .agent-row-main,
@@ -367,7 +380,7 @@ input[type="text"] {
 }
 
 .splitter.dragging {
-  background: #1b2230;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .splitter-toggle {

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Miru</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%89%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
@@ -22,7 +23,7 @@
         <input id="agent-cwd" type="text" name="cwd" placeholder="Folder path" autocomplete="off" spellcheck="false">
         <input id="agent-name" type="text" name="name" placeholder="Name (optional)" autocomplete="off" spellcheck="false">
         <div class="row-actions">
-          <button class="primary-button" type="submit">Create</button>
+          <button class="primary-button create-agent-button" type="submit" aria-label="Create agent" title="Create agent">+</button>
         </div>
         <div id="create-agent-error" class="form-error"></div>
       </form>
