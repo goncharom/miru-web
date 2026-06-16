@@ -28,6 +28,7 @@ interface TerminalState {
   queuedChunks: string[];
   lastSentCols: number;
   lastSentRows: number;
+  initVersion: number;
 }
 
 const shell = getElement<HTMLDivElement>('shell');
@@ -72,6 +73,7 @@ const state: {
   uploadedPath: string;
   artifactRequestToken: number;
   resizeObserver: ResizeObserver | null;
+  agentsRenderQueued: boolean;
 } = {
   agents: [],
   selectedAgentId: window.localStorage.getItem(selectedAgentStorageKey),
@@ -85,6 +87,7 @@ const state: {
   uploadedPath: '',
   artifactRequestToken: 0,
   resizeObserver: null,
+  agentsRenderQueued: false,
 };
 
 applyLayout();
@@ -202,6 +205,7 @@ function handleServerEvent(event: ServerEvent): void {
           terminalState.initialized = false;
           terminalState.initializing = false;
           terminalState.queuedChunks = [];
+          terminalState.initVersion += 1;
         }
         runTask(ensureTerminalReady(state.selectedAgentId));
         runTask(loadArtifacts({ quiet: true }));
@@ -212,8 +216,7 @@ function handleServerEvent(event: ServerEvent): void {
       return;
     case 'terminal_data': {
       if (event.agentId !== state.selectedAgentId) {
-        state.activityAgentIds.add(event.agentId);
-        renderAgents();
+        markAgentActivity(event.agentId);
       }
       const terminalState = state.terminals.get(event.agentId);
       if (terminalState?.initialized) {
@@ -225,8 +228,7 @@ function handleServerEvent(event: ServerEvent): void {
     }
     case 'terminal_exit':
       if (event.agentId !== state.selectedAgentId) {
-        state.activityAgentIds.add(event.agentId);
-        renderAgents();
+        markAgentActivity(event.agentId);
       }
       return;
   }
@@ -408,7 +410,7 @@ async function ensureTerminalReady(agentId: string | null): Promise<void> {
 
   const terminalState = ensureTerminalState(agentId);
   if (terminalState.initialized || terminalState.initializing) {
-    if (terminalState.initialized) {
+    if (terminalState.initialized && state.selectedAgentId === agentId) {
       focusTerminal(agentId);
     }
     return;
@@ -416,10 +418,14 @@ async function ensureTerminalReady(agentId: string | null): Promise<void> {
 
   terminalState.initializing = true;
   terminalState.queuedChunks = [];
+  const initVersion = ++terminalState.initVersion;
 
   try {
     const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/terminal-buffer`);
     const body = (await response.json()) as AgentBufferPayload;
+    if (terminalState.initVersion !== initVersion) {
+      return;
+    }
     terminalState.terminal.reset();
     terminalState.terminal.write(body.data || '');
     for (const chunk of terminalState.queuedChunks) {
@@ -427,9 +433,13 @@ async function ensureTerminalReady(agentId: string | null): Promise<void> {
     }
     terminalState.initialized = true;
     terminalState.queuedChunks = [];
-    focusTerminal(agentId);
+    if (state.selectedAgentId === agentId) {
+      focusTerminal(agentId);
+    }
   } finally {
-    terminalState.initializing = false;
+    if (terminalState.initVersion === initVersion) {
+      terminalState.initializing = false;
+    }
   }
 }
 
@@ -473,6 +483,7 @@ function ensureTerminalState(agentId: string): TerminalState {
     queuedChunks: [],
     lastSentCols: 0,
     lastSentRows: 0,
+    initVersion: 0,
   };
 
   state.terminals.set(agentId, terminalState);
@@ -708,6 +719,21 @@ function sendClientEvent(event: ClientEvent): void {
   const socket = state.ws;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify(event));
+}
+
+function markAgentActivity(agentId: string): void {
+  if (state.activityAgentIds.has(agentId)) return;
+  state.activityAgentIds.add(agentId);
+  scheduleRenderAgents();
+}
+
+function scheduleRenderAgents(): void {
+  if (state.agentsRenderQueued) return;
+  state.agentsRenderQueued = true;
+  requestAnimationFrame(() => {
+    state.agentsRenderQueued = false;
+    renderAgents();
+  });
 }
 
 function renderServerStatus(): void {
