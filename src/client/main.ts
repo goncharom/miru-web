@@ -1,5 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
-import { Terminal } from 'xterm';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { Terminal } from '@xterm/xterm';
 import './theme.css';
 import type {
   AgentBufferPayload,
@@ -22,6 +23,8 @@ interface LayoutState {
 interface TerminalState {
   terminal: Terminal;
   fitAddon: FitAddon;
+  webglAddon: WebglAddon | null;
+  webglUnavailable: boolean;
   container: HTMLDivElement;
   initialized: boolean;
   initializing: boolean;
@@ -405,6 +408,8 @@ function renderTerminalSelection(): void {
     terminalState.container.classList.toggle('active', agentId === selectedId);
   }
 
+  updateTerminalRenderers();
+
   if (selectedId) {
     scheduleFitSelectedTerminal();
   }
@@ -482,6 +487,8 @@ function ensureTerminalState(agentId: string): TerminalState {
   const terminalState: TerminalState = {
     terminal,
     fitAddon,
+    webglAddon: null,
+    webglUnavailable: false,
     container,
     initialized: false,
     initializing: false,
@@ -493,6 +500,44 @@ function ensureTerminalState(agentId: string): TerminalState {
 
   state.terminals.set(agentId, terminalState);
   return terminalState;
+}
+
+function updateTerminalRenderers(): void {
+  const selectedId = state.selectedAgentId;
+
+  for (const [agentId, terminalState] of state.terminals) {
+    if (agentId === selectedId) {
+      enableWebglRenderer(terminalState);
+    } else {
+      disableWebglRenderer(terminalState);
+    }
+  }
+}
+
+function enableWebglRenderer(terminalState: TerminalState): void {
+  if (terminalState.webglAddon || terminalState.webglUnavailable) return;
+
+  let webglAddon: WebglAddon | null = null;
+  try {
+    webglAddon = new WebglAddon();
+    webglAddon.onContextLoss(() => {
+      if (terminalState.webglAddon !== webglAddon) return;
+      terminalState.webglAddon = null;
+      console.warn('Xterm WebGL renderer lost context; falling back to DOM renderer.');
+      webglAddon.dispose();
+    });
+    terminalState.terminal.loadAddon(webglAddon);
+    terminalState.webglAddon = webglAddon;
+  } catch (error) {
+    webglAddon?.dispose();
+    terminalState.webglUnavailable = true;
+    console.warn('Xterm WebGL renderer unavailable; falling back to DOM renderer.', error);
+  }
+}
+
+function disableWebglRenderer(terminalState: TerminalState): void {
+  terminalState.webglAddon?.dispose();
+  terminalState.webglAddon = null;
 }
 
 function focusTerminal(agentId: string): void {
