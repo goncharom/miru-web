@@ -1,5 +1,4 @@
 import { FitAddon } from '@xterm/addon-fit';
-import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import './theme.css';
 import type {
@@ -23,8 +22,6 @@ interface LayoutState {
 interface TerminalState {
   terminal: Terminal;
   fitAddon: FitAddon;
-  webglAddon: WebglAddon | null;
-  webglUnavailable: boolean;
   container: HTMLDivElement;
   initialized: boolean;
   initializing: boolean;
@@ -40,6 +37,7 @@ const createAgentForm = getElement<HTMLFormElement>('create-agent-form');
 const createAgentErrorEl = getElement<HTMLDivElement>('create-agent-error');
 const agentCwdInput = getElement<HTMLInputElement>('agent-cwd');
 const agentNameInput = getElement<HTMLInputElement>('agent-name');
+const agentWorkspaceInput = getElement<HTMLInputElement>('agent-workspace');
 const agentListEl = getElement<HTMLDivElement>('agent-list');
 const selectedAgentNameEl = getElement<HTMLDivElement>('selected-agent-name');
 const selectedAgentDetailEl = getElement<HTMLDivElement>('selected-agent-detail');
@@ -274,6 +272,7 @@ function replaceAgents(agents: AgentSummary[]): void {
 async function createAgent(): Promise<void> {
   const cwd = agentCwdInput.value.trim();
   const name = agentNameInput.value.trim();
+  const workspaceName = agentWorkspaceInput.value.trim();
   createAgentErrorEl.textContent = '';
 
   if (!cwd) {
@@ -281,7 +280,11 @@ async function createAgent(): Promise<void> {
     return;
   }
 
-  const payload: CreateAgentInput = { cwd, name: name || undefined };
+  const payload: CreateAgentInput = {
+    cwd,
+    name: name || undefined,
+    workspaceName: workspaceName || undefined,
+  };
 
   const response = await fetch('/api/agents', {
     method: 'POST',
@@ -297,6 +300,7 @@ async function createAgent(): Promise<void> {
 
   createAgentErrorEl.textContent = '';
   agentNameInput.value = '';
+  agentWorkspaceInput.value = '';
   state.selectedAgentId = body.agent.id;
   persistSelectedAgent();
   state.activityAgentIds.delete(body.agent.id);
@@ -408,8 +412,6 @@ function renderTerminalSelection(): void {
     terminalState.container.classList.toggle('active', agentId === selectedId);
   }
 
-  updateTerminalRenderers();
-
   if (selectedId) {
     scheduleFitSelectedTerminal();
   }
@@ -463,7 +465,7 @@ function ensureTerminalState(agentId: string): TerminalState {
 
   const terminal = new Terminal({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
     theme: {
       background: '#000000',
@@ -488,8 +490,6 @@ function ensureTerminalState(agentId: string): TerminalState {
   const terminalState: TerminalState = {
     terminal,
     fitAddon,
-    webglAddon: null,
-    webglUnavailable: false,
     container,
     initialized: false,
     initializing: false,
@@ -526,44 +526,6 @@ function sendBracketedTerminalPaste(agentId: string, text: string): void {
     agentId,
     data: `\u001b[200~${normalized}\u001b[201~`,
   });
-}
-
-function updateTerminalRenderers(): void {
-  const selectedId = state.selectedAgentId;
-
-  for (const [agentId, terminalState] of state.terminals) {
-    if (agentId === selectedId) {
-      enableWebglRenderer(terminalState);
-    } else {
-      disableWebglRenderer(terminalState);
-    }
-  }
-}
-
-function enableWebglRenderer(terminalState: TerminalState): void {
-  if (terminalState.webglAddon || terminalState.webglUnavailable) return;
-
-  let webglAddon: WebglAddon | null = null;
-  try {
-    webglAddon = new WebglAddon();
-    webglAddon.onContextLoss(() => {
-      if (terminalState.webglAddon !== webglAddon) return;
-      terminalState.webglAddon = null;
-      console.warn('Xterm WebGL renderer lost context; falling back to DOM renderer.');
-      webglAddon.dispose();
-    });
-    terminalState.terminal.loadAddon(webglAddon);
-    terminalState.webglAddon = webglAddon;
-  } catch (error) {
-    webglAddon?.dispose();
-    terminalState.webglUnavailable = true;
-    console.warn('Xterm WebGL renderer unavailable; falling back to DOM renderer.', error);
-  }
-}
-
-function disableWebglRenderer(terminalState: TerminalState): void {
-  terminalState.webglAddon?.dispose();
-  terminalState.webglAddon = null;
 }
 
 function focusTerminal(agentId: string): void {
@@ -620,9 +582,15 @@ async function deleteAgent(agentId: string): Promise<void> {
   const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
     method: 'DELETE',
   });
+  const body = await response.json().catch(() => null);
 
   if (!response.ok) {
+    window.alert(body?.error ?? 'Could not delete agent.');
     return;
+  }
+
+  if (body?.warning) {
+    window.alert(body.warning);
   }
 
   if (state.selectedAgentId === agentId) {

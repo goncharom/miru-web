@@ -176,8 +176,8 @@ async function handleAgentsApi(
         sendJson(res, 404, { error: 'Agent not found' });
         return;
       }
-      await agentManager.delete(agentId);
-      sendJson(res, 200, { ok: true });
+      const warning = await agentManager.delete(agentId);
+      sendJson(res, 200, warning ? { ok: true, warning } : { ok: true });
       return;
     }
 

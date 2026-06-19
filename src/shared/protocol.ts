@@ -33,6 +33,7 @@ export interface ServerStatusPayload {
 export interface CreateAgentInput {
   cwd: string;
   name?: string;
+  workspaceName?: string;
 }
 
 export interface UploadImageResult {

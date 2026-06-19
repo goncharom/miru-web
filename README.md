@@ -8,6 +8,7 @@ Local web UI for running multiple Pi agents in parallel.
 - fixed local bind on `127.0.0.1:4242` by default
 - one focused terminal at a time with `xterm.js`
 - one `zellij` session per agent
+- optional git worktree + branch per agent
 - Pi launched inside each agent session
 - existing `miru-agent-*` zellij sessions are rediscovered on server startup
 - server shutdown detaches from agent sessions but does not kill them
@@ -23,6 +24,7 @@ Local web UI for running multiple Pi agents in parallel.
 - Node.js
 - `zellij` in `$PATH`
 - `pi` in `$PATH`
+- `git` in `$PATH` for optional worktrees
 
 ## Install
 

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import * as pty from 'node-pty';
 import type { CreateAgentInput, AgentSummary } from '../shared/protocol';
 import { INITIAL_COLS, INITIAL_ROWS, TERMINAL_BUFFER_LIMIT } from './config';
+import { createManagedWorktree, deleteManagedWorktreeInfo, loadManagedWorktreeInfo, removeManagedWorktree, type ManagedWorktreeInfo } from './git';
 import { createZellijSession, discoverMiruSessions, type DiscoveredMiruSession, killZellijSession } from './zellij';
 import {
   defaultAgentName,
@@ -32,6 +33,7 @@ interface AgentRecord {
   buffer: string;
   deleting: boolean;
   detaching: boolean;
+  managedWorktree: ManagedWorktreeInfo | null;
   osc52: Osc52State;
 }
 
@@ -66,7 +68,12 @@ export class AgentManager extends EventEmitter {
 
     for (const session of discovered) {
       if (this.agents.has(session.agentId)) continue;
-      await this.attachDiscoveredSession(session, Date.now() + index);
+      const managedWorktree = await loadManagedWorktreeInfo(session.agentId);
+      await this.attachDiscoveredSession(
+        session,
+        Date.now() + index,
+        managedWorktree?.agentId === session.agentId ? managedWorktree : null,
+      );
       index += 1;
     }
 
@@ -80,19 +87,42 @@ export class AgentManager extends EventEmitter {
     const id = makeAgentId();
     const name = (input.name?.trim() || defaultAgentName(cwd)).slice(0, 80);
     const sessionName = makeSessionName(id);
+    const workspaceName = input.workspaceName?.trim();
+    let launchCwd = cwd;
+    let managedWorktree: ManagedWorktreeInfo | null = null;
 
-    await createZellijSession(sessionName, cwd, name);
+    try {
+      if (workspaceName) {
+        const createdWorktree = await createManagedWorktree(id, cwd, workspaceName);
+        launchCwd = createdWorktree.launchCwd;
+        managedWorktree = createdWorktree;
+      }
+
+      await createZellijSession(sessionName, launchCwd, name);
+    } catch (error) {
+      await killZellijSession(sessionName);
+      if (managedWorktree) {
+        try {
+          await removeManagedWorktree(managedWorktree);
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+      await deleteManagedWorktreeInfo(id);
+      throw error;
+    }
 
     const agent = await this.attachDiscoveredSession(
       {
         agentId: id,
         sessionName,
         name,
-        cwd,
+        cwd: launchCwd,
         lastExitCode: null,
         running: true,
       },
       Date.now(),
+      managedWorktree,
     );
 
     this.emitAgentsChanged();
@@ -113,7 +143,7 @@ export class AgentManager extends EventEmitter {
     agent.updatedAt = Date.now();
   }
 
-  async delete(agentId: string): Promise<void> {
+  async delete(agentId: string): Promise<string | undefined> {
     const agent = this.requireAgent(agentId);
     agent.deleting = true;
 
@@ -123,9 +153,23 @@ export class AgentManager extends EventEmitter {
       // ignore
     }
 
+    let warning: string | undefined;
+
     await killZellijSession(agent.sessionName);
+
+    if (agent.managedWorktree) {
+      try {
+        await removeManagedWorktree(agent.managedWorktree);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warning = `Agent session removed, but worktree cleanup failed: ${message}`;
+      }
+    }
+
+    await deleteManagedWorktreeInfo(agent.id);
     this.agents.delete(agentId);
     this.emitAgentsChanged();
+    return warning;
   }
 
   async detachAll(): Promise<void> {
@@ -141,7 +185,11 @@ export class AgentManager extends EventEmitter {
     );
   }
 
-  private async attachDiscoveredSession(session: DiscoveredMiruSession, createdAt: number): Promise<AgentRecord> {
+  private async attachDiscoveredSession(
+    session: DiscoveredMiruSession,
+    createdAt: number,
+    managedWorktree: ManagedWorktreeInfo | null = null,
+  ): Promise<AgentRecord> {
     const terminal = pty.spawn('zellij', ['attach', session.sessionName], {
       name: 'xterm-256color',
       cols: INITIAL_COLS,
@@ -167,6 +215,7 @@ export class AgentManager extends EventEmitter {
       buffer: '',
       deleting: false,
       detaching: false,
+      managedWorktree,
       osc52: {
         inOsc: false,
         oscData: '',
