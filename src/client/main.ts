@@ -479,6 +479,7 @@ function ensureTerminalState(agentId: string): TerminalState {
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(container);
+  attachTerminalKeyHandler(terminal, agentId);
   attachTerminalPasteHandler(container, terminal, agentId);
   terminal.onData((data) => {
     sendClientEvent({ type: 'terminal_input', agentId, data });
@@ -501,6 +502,27 @@ function ensureTerminalState(agentId: string): TerminalState {
 
   state.terminals.set(agentId, terminalState);
   return terminalState;
+}
+
+function attachTerminalKeyHandler(terminal: Terminal, agentId: string): void {
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (event.key !== 'Enter' || !event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
+      return true;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.type === 'keydown') {
+      sendClientEvent({
+        type: 'terminal_input',
+        agentId,
+        data: '\u001b[13;2u',
+      });
+    }
+
+    return false;
+  });
 }
 
 function attachTerminalPasteHandler(container: HTMLDivElement, terminal: Terminal, agentId: string): void {
