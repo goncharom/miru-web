@@ -477,6 +477,7 @@ function ensureTerminalState(agentId: string): TerminalState {
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(container);
+  attachTerminalPasteHandler(container, terminal, agentId);
   terminal.onData((data) => {
     sendClientEvent({ type: 'terminal_input', agentId, data });
   });
@@ -500,6 +501,31 @@ function ensureTerminalState(agentId: string): TerminalState {
 
   state.terminals.set(agentId, terminalState);
   return terminalState;
+}
+
+function attachTerminalPasteHandler(container: HTMLDivElement, terminal: Terminal, agentId: string): void {
+  container.addEventListener(
+    'paste',
+    (event) => {
+      const text = event.clipboardData?.getData('text/plain');
+      if (!text || !/[\r\n]/.test(text)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      sendBracketedTerminalPaste(agentId, text);
+      terminal.focus();
+    },
+    { capture: true },
+  );
+}
+
+function sendBracketedTerminalPaste(agentId: string, text: string): void {
+  const normalized = text.replace(/\r?\n/g, '\r');
+  sendClientEvent({
+    type: 'terminal_input',
+    agentId,
+    data: `\u001b[200~${normalized}\u001b[201~`,
+  });
 }
 
 function updateTerminalRenderers(): void {
