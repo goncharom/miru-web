@@ -14,7 +14,7 @@
   </header>
 
   <main id="shell" class="shell">
-    <aside id="left-pane" class="pane pane-left">
+    <aside class="pane pane-left">
       <div class="pane-header pane-header-left">
         <div class="pane-title">Agents</div>
       </div>
@@ -32,12 +32,12 @@
       <div id="agent-list" class="agent-list"></div>
     </aside>
 
-    <div id="left-splitter" class="splitter splitter-left">
+    <div id="left-splitter" class="splitter">
       <button id="toggle-left" class="splitter-toggle" type="button" title="Toggle agents pane">◂</button>
     </div>
 
-    <section id="center-pane" class="pane pane-center">
-      <div id="selected-agent-header" class="selected-agent-header">
+    <section class="pane pane-center">
+      <div class="selected-agent-header">
         <div class="selected-agent-meta">
           <div id="selected-agent-name" class="selected-agent-name">No agent selected</div>
           <div id="selected-agent-detail" class="selected-agent-detail">Create an agent to begin.</div>
@@ -48,32 +48,16 @@
       <div id="terminal-empty" class="terminal-empty">No agent selected.</div>
     </section>
 
-    <div id="right-splitter" class="splitter splitter-right">
-      <button id="toggle-right" class="splitter-toggle" type="button" title="Toggle artifacts pane">▸</button>
+    <div id="right-splitter" class="splitter">
+      <button id="toggle-right" class="splitter-toggle" type="button" title="Toggle panels pane">▸</button>
     </div>
 
-    <aside id="right-pane" class="pane pane-right">
+    <aside class="pane pane-right">
       <div class="pane-header">
-        <div class="pane-title">Artifacts</div>
+        <div class="pane-title">Panels</div>
       </div>
-
-      <div class="upload-panel">
-        <div class="upload-actions">
-          <button id="choose-image" type="button">Choose image</button>
-          <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-        </div>
-        <div id="paste-target" class="paste-target" tabindex="0">Paste image here</div>
-        <div id="upload-status" class="muted-text">Select an agent to upload.</div>
-        <div id="uploaded-path-row" class="uploaded-path-row" hidden>
-          <div id="uploaded-path-text" class="path-text"></div>
-          <div class="row-actions compact-actions">
-            <button id="copy-uploaded-path" type="button">Copy path</button>
-            <button id="insert-uploaded-path" type="button">Insert path</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="artifact-list" class="artifact-list"></div>
+      <div id="right-pane-tabs" class="pane-tabs"></div>
+      <div id="right-pane-content" class="pane-tab-content"></div>
     </aside>
   </main>
 

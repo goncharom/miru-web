@@ -1,22 +1,60 @@
 import { EventEmitter } from 'node:events';
 import { resolve } from 'node:path';
-import * as pty from 'node-pty';
-import type { CreateAgentInput, AgentSummary } from '../shared/protocol';
-import { INITIAL_COLS, INITIAL_ROWS, TERMINAL_BUFFER_LIMIT } from './config';
-import { createManagedWorktree, deleteManagedWorktreeInfo, loadManagedWorktreeInfo, removeManagedWorktree, type ManagedWorktreeInfo } from './git';
-import { createZellijSession, discoverMiruSessions, type DiscoveredMiruSession, killZellijSession } from './zellij';
-import {
-  defaultAgentName,
-  folderTagFromCwd,
-  makeAgentId,
-  makeSessionName,
-  validateDirectory,
-} from './utils';
+import type * as pty from 'node-pty';
+import type { AgentSummary, CreateAgentInput } from '../shared/protocol';
+import { TerminalSession } from './terminal';
+import { defaultAgentName, folderTagFromCwd, makeAgentId, makeSessionName, validateDirectory } from './utils';
 
-interface Osc52State {
-  inOsc: boolean;
-  oscData: string;
-  pendingEsc: boolean;
+export interface DiscoveredSession {
+  agentId: string;
+  sessionName: string;
+  name: string;
+  cwd: string;
+  lastExitCode: number | null;
+  running: boolean;
+}
+
+export interface CreateSessionRequest {
+  agentId: string;
+  sessionName: string;
+  name: string;
+  cwd: string;
+  launchCommand: string[];
+}
+
+export interface AttachSessionOptions {
+  cols: number;
+  rows: number;
+}
+
+export interface SessionBackend {
+  createSession(input: CreateSessionRequest): Promise<DiscoveredSession>;
+  discoverSessions(): Promise<DiscoveredSession[]>;
+  attach(session: DiscoveredSession, options: AttachSessionOptions): pty.IPty;
+  killSession(sessionName: string): Promise<void>;
+}
+
+export interface PreparedWorkspace {
+  launchCwd: string;
+  metadata?: unknown;
+}
+
+export interface PrepareWorkspaceInput {
+  agentId: string;
+  cwd: string;
+  workspaceName?: string;
+}
+
+export interface WorkspaceProvider {
+  canPrepare(input: CreateAgentInput): boolean;
+  prepare(input: PrepareWorkspaceInput): Promise<PreparedWorkspace>;
+  recover(agentId: string, sessionCwd: string): Promise<PreparedWorkspace | null>;
+  cleanup(workspace: PreparedWorkspace): Promise<void>;
+}
+
+interface WorkspaceHandle {
+  provider: WorkspaceProvider;
+  prepared: PreparedWorkspace;
 }
 
 interface AgentRecord {
@@ -29,12 +67,10 @@ interface AgentRecord {
   createdAt: number;
   updatedAt: number;
   lastExitCode: number | null;
-  terminal: pty.IPty;
-  buffer: string;
+  terminal: TerminalSession;
   deleting: boolean;
   detaching: boolean;
-  managedWorktree: ManagedWorktreeInfo | null;
-  osc52: Osc52State;
+  workspace: WorkspaceHandle | null;
 }
 
 export interface AgentsEvents {
@@ -44,8 +80,33 @@ export interface AgentsEvents {
   clipboardCopy: (agentId: string, text: string) => void;
 }
 
+export interface AgentManagerOptions {
+  sessionBackend: SessionBackend;
+  workspaceProviders: WorkspaceProvider[];
+  launchCommand: string[];
+  initialCols: number;
+  initialRows: number;
+  terminalBufferLimit: number;
+}
+
 export class AgentManager extends EventEmitter {
   private readonly agents = new Map<string, AgentRecord>();
+  private readonly sessionBackend: SessionBackend;
+  private readonly workspaceProviders: WorkspaceProvider[];
+  private readonly launchCommand: string[];
+  private readonly initialCols: number;
+  private readonly initialRows: number;
+  private readonly terminalBufferLimit: number;
+
+  constructor(options: AgentManagerOptions) {
+    super();
+    this.sessionBackend = options.sessionBackend;
+    this.workspaceProviders = options.workspaceProviders;
+    this.launchCommand = [...options.launchCommand];
+    this.initialCols = options.initialCols;
+    this.initialRows = options.initialRows;
+    this.terminalBufferLimit = options.terminalBufferLimit;
+  }
 
   list(): AgentSummary[] {
     return Array.from(this.agents.values())
@@ -53,27 +114,27 @@ export class AgentManager extends EventEmitter {
       .sort((a, b) => a.createdAt - b.createdAt);
   }
 
-  get(agentId: string): AgentRecord | undefined {
-    return this.agents.get(agentId);
+  getSummary(agentId: string): AgentSummary | undefined {
+    const agent = this.agents.get(agentId);
+    return agent ? this.toSummary(agent) : undefined;
+  }
+
+  getCwd(agentId: string): string | undefined {
+    return this.agents.get(agentId)?.cwd;
   }
 
   getBuffer(agentId: string): string {
-    const agent = this.requireAgent(agentId);
-    return agent.buffer;
+    return this.requireAgent(agentId).terminal.getBuffer();
   }
 
   async restoreExisting(): Promise<void> {
-    const discovered = await discoverMiruSessions();
+    const discovered = await this.sessionBackend.discoverSessions();
     let index = 0;
 
     for (const session of discovered) {
       if (this.agents.has(session.agentId)) continue;
-      const managedWorktree = await loadManagedWorktreeInfo(session.agentId);
-      await this.attachDiscoveredSession(
-        session,
-        Date.now() + index,
-        managedWorktree?.agentId === session.agentId ? managedWorktree : null,
-      );
+      const workspace = await this.recoverWorkspace(session.agentId, session.cwd);
+      await this.attachDiscoveredSession(session, Date.now() + index, workspace);
       index += 1;
     }
 
@@ -87,46 +148,51 @@ export class AgentManager extends EventEmitter {
     const id = makeAgentId();
     const name = (input.name?.trim() || defaultAgentName(cwd)).slice(0, 80);
     const sessionName = makeSessionName(id);
-    const workspaceName = input.workspaceName?.trim();
-    let launchCwd = cwd;
-    let managedWorktree: ManagedWorktreeInfo | null = null;
+    const workspaceName = input.workspaceName?.trim() || undefined;
+    const normalizedInput: CreateAgentInput = {
+      cwd,
+      name,
+      workspaceName,
+    };
+
+    const provider = this.selectWorkspaceProvider(normalizedInput);
+    let workspace: WorkspaceHandle | null = null;
+    let createdSession: DiscoveredSession | null = null;
 
     try {
-      if (workspaceName) {
-        const createdWorktree = await createManagedWorktree(id, cwd, workspaceName);
-        launchCwd = createdWorktree.launchCwd;
-        managedWorktree = createdWorktree;
-      }
+      const prepared = await provider.prepare({
+        agentId: id,
+        cwd,
+        workspaceName,
+      });
+      workspace = { provider, prepared };
 
-      await createZellijSession(sessionName, launchCwd, name);
+      createdSession = await this.sessionBackend.createSession({
+        agentId: id,
+        sessionName,
+        name,
+        cwd: prepared.launchCwd,
+        launchCommand: this.launchCommand,
+      });
+
+      const agent = await this.attachDiscoveredSession(createdSession, Date.now(), workspace);
+      this.emitAgentsChanged();
+      return this.toSummary(agent);
     } catch (error) {
-      await killZellijSession(sessionName);
-      if (managedWorktree) {
+      if (createdSession) {
+        await this.sessionBackend.killSession(createdSession.sessionName);
+      } else {
+        await this.sessionBackend.killSession(sessionName);
+      }
+      if (workspace) {
         try {
-          await removeManagedWorktree(managedWorktree);
+          await workspace.provider.cleanup(workspace.prepared);
         } catch {
           // ignore cleanup errors
         }
       }
-      await deleteManagedWorktreeInfo(id);
       throw error;
     }
-
-    const agent = await this.attachDiscoveredSession(
-      {
-        agentId: id,
-        sessionName,
-        name,
-        cwd: launchCwd,
-        lastExitCode: null,
-        running: true,
-      },
-      Date.now(),
-      managedWorktree,
-    );
-
-    this.emitAgentsChanged();
-    return this.toSummary(agent);
   }
 
   write(agentId: string, data: string): void {
@@ -137,9 +203,7 @@ export class AgentManager extends EventEmitter {
 
   resize(agentId: string, cols: number, rows: number): void {
     const agent = this.requireAgent(agentId);
-    const safeCols = Math.max(20, Math.floor(cols));
-    const safeRows = Math.max(6, Math.floor(rows));
-    agent.terminal.resize(safeCols, safeRows);
+    agent.terminal.resize(cols, rows);
     agent.updatedAt = Date.now();
   }
 
@@ -155,18 +219,17 @@ export class AgentManager extends EventEmitter {
 
     let warning: string | undefined;
 
-    await killZellijSession(agent.sessionName);
+    await this.sessionBackend.killSession(agent.sessionName);
 
-    if (agent.managedWorktree) {
+    if (agent.workspace) {
       try {
-        await removeManagedWorktree(agent.managedWorktree);
+        await agent.workspace.provider.cleanup(agent.workspace.prepared);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        warning = `Agent session removed, but worktree cleanup failed: ${message}`;
+        warning = `Agent session removed, but workspace cleanup failed: ${message}`;
       }
     }
 
-    await deleteManagedWorktreeInfo(agent.id);
     this.agents.delete(agentId);
     this.emitAgentsChanged();
     return warning;
@@ -186,19 +249,13 @@ export class AgentManager extends EventEmitter {
   }
 
   private async attachDiscoveredSession(
-    session: DiscoveredMiruSession,
+    session: DiscoveredSession,
     createdAt: number,
-    managedWorktree: ManagedWorktreeInfo | null = null,
+    workspace: WorkspaceHandle | null,
   ): Promise<AgentRecord> {
-    const terminal = pty.spawn('zellij', ['attach', session.sessionName], {
-      name: 'xterm-256color',
-      cols: INITIAL_COLS,
-      rows: INITIAL_ROWS,
-      cwd: session.cwd,
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-      },
+    const ptyProcess = this.sessionBackend.attach(session, {
+      cols: this.initialCols,
+      rows: this.initialRows,
     });
 
     const agent: AgentRecord = {
@@ -211,47 +268,56 @@ export class AgentManager extends EventEmitter {
       createdAt,
       updatedAt: Date.now(),
       lastExitCode: session.lastExitCode,
-      terminal,
-      buffer: '',
+      terminal: new TerminalSession(
+        ptyProcess,
+        {
+          onData: (data) => {
+            agent.updatedAt = Date.now();
+            this.emit('terminalData', agent.id, data);
+          },
+          onClipboardCopy: (text) => {
+            agent.updatedAt = Date.now();
+            this.emit('clipboardCopy', agent.id, text);
+          },
+          onExit: (exitCode) => {
+            agent.updatedAt = Date.now();
+            agent.lastExitCode = exitCode;
+            if (!agent.deleting && !agent.detaching) {
+              agent.status = exitCode === 0 ? 'exited' : 'error';
+            }
+            this.emit('terminalExit', agent.id, exitCode);
+            if (!agent.detaching) {
+              this.emitAgentsChanged();
+            }
+          },
+        },
+        { bufferLimit: this.terminalBufferLimit },
+      ),
       deleting: false,
       detaching: false,
-      managedWorktree,
-      osc52: {
-        inOsc: false,
-        oscData: '',
-        pendingEsc: false,
-      },
+      workspace,
     };
-
-    terminal.onData((data) => {
-      agent.updatedAt = Date.now();
-      const processed = extractOsc52(agent.osc52, data);
-      if (processed.displayData) {
-        agent.buffer += processed.displayData;
-        if (agent.buffer.length > TERMINAL_BUFFER_LIMIT) {
-          agent.buffer = agent.buffer.slice(agent.buffer.length - TERMINAL_BUFFER_LIMIT);
-        }
-        this.emit('terminalData', agent.id, processed.displayData);
-      }
-      for (const text of processed.clipboardTexts) {
-        this.emit('clipboardCopy', agent.id, text);
-      }
-    });
-
-    terminal.onExit(({ exitCode }) => {
-      agent.updatedAt = Date.now();
-      agent.lastExitCode = exitCode;
-      if (!agent.deleting && !agent.detaching) {
-        agent.status = exitCode === 0 ? 'exited' : 'error';
-      }
-      this.emit('terminalExit', agent.id, exitCode);
-      if (!agent.detaching) {
-        this.emitAgentsChanged();
-      }
-    });
 
     this.agents.set(agent.id, agent);
     return agent;
+  }
+
+  private async recoverWorkspace(agentId: string, sessionCwd: string): Promise<WorkspaceHandle | null> {
+    for (const provider of this.workspaceProviders) {
+      const recovered = await provider.recover(agentId, sessionCwd);
+      if (recovered) {
+        return { provider, prepared: recovered };
+      }
+    }
+    return null;
+  }
+
+  private selectWorkspaceProvider(input: CreateAgentInput): WorkspaceProvider {
+    const provider = this.workspaceProviders.find((candidate) => candidate.canPrepare(input));
+    if (!provider) {
+      throw new Error('No workspace provider available for input');
+    }
+    return provider;
   }
 
   private requireAgent(agentId: string): AgentRecord {
@@ -278,118 +344,5 @@ export class AgentManager extends EventEmitter {
 
   private emitAgentsChanged(): void {
     this.emit('agentsChanged', this.list());
-  }
-}
-
-const OSC = ']';
-const BEL = '\x07';
-const ESC = '\x1b';
-const ST = '\x1b\\';
-const MAX_OSC52_BASE64_LENGTH = 1024 * 1024;
-
-function extractOsc52(state: Osc52State, chunk: string): { displayData: string; clipboardTexts: string[] } {
-  let displayData = '';
-  const clipboardTexts: string[] = [];
-  let index = 0;
-
-  if (state.pendingEsc) {
-    state.pendingEsc = false;
-    if (state.inOsc) {
-      if (chunk.startsWith('\\')) {
-        const completed = completeOsc(state, ST);
-        displayData += completed.displayData;
-        if (completed.clipboardText != null) clipboardTexts.push(completed.clipboardText);
-        index = 1;
-      } else {
-        state.oscData += ESC;
-      }
-    } else if (chunk.startsWith(OSC)) {
-      state.inOsc = true;
-      state.oscData = '';
-      index = 1;
-    } else {
-      displayData += ESC;
-    }
-  }
-
-  while (index < chunk.length) {
-    const char = chunk[index];
-
-    if (!state.inOsc) {
-      if (char === ESC) {
-        if (index + 1 >= chunk.length) {
-          state.pendingEsc = true;
-          break;
-        }
-        if (chunk[index + 1] === OSC) {
-          state.inOsc = true;
-          state.oscData = '';
-          index += 2;
-          continue;
-        }
-      }
-      displayData += char;
-      index += 1;
-      continue;
-    }
-
-    if (char === BEL) {
-      const completed = completeOsc(state, BEL);
-      displayData += completed.displayData;
-      if (completed.clipboardText != null) clipboardTexts.push(completed.clipboardText);
-      index += 1;
-      continue;
-    }
-
-    if (char === ESC) {
-      if (index + 1 >= chunk.length) {
-        state.pendingEsc = true;
-        break;
-      }
-      if (chunk[index + 1] === '\\') {
-        const completed = completeOsc(state, ST);
-        displayData += completed.displayData;
-        if (completed.clipboardText != null) clipboardTexts.push(completed.clipboardText);
-        index += 2;
-        continue;
-      }
-    }
-
-    state.oscData += char;
-    index += 1;
-  }
-
-  return { displayData, clipboardTexts };
-}
-
-function completeOsc(state: Osc52State, terminator: string): { displayData: string; clipboardText?: string } {
-  const rawData = state.oscData;
-  state.inOsc = false;
-  state.oscData = '';
-
-  const firstSeparator = rawData.indexOf(';');
-  const secondSeparator = firstSeparator < 0 ? -1 : rawData.indexOf(';', firstSeparator + 1);
-  if (firstSeparator < 0 || secondSeparator < 0 || rawData.slice(0, firstSeparator) !== '52') {
-    return { displayData: `${ESC}${OSC}${rawData}${terminator}` };
-  }
-
-  const payload = rawData.slice(secondSeparator + 1);
-  if (payload === '?') {
-    return { displayData: '' };
-  }
-
-  const clipboardText = decodeOsc52Payload(payload);
-  return clipboardText == null ? { displayData: '' } : { displayData: '', clipboardText };
-}
-
-function decodeOsc52Payload(payload: string): string | null {
-  if (payload.length > MAX_OSC52_BASE64_LENGTH) {
-    return null;
-  }
-
-  try {
-    return Buffer.from(payload, 'base64').toString('utf8');
-  } catch {
-    return null;
   }
 }

@@ -3,13 +3,33 @@ import { createServer } from 'node:http';
 import { relative, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { ClientEvent, CreateAgentInput, ServerEvent, ServerStatusPayload } from '../shared/protocol';
-import { contentTypeForPath, listArtifacts, readArtifact, saveUploadedImage } from './artifacts';
+import { contentTypeForPath, LocalArtifactStore } from './artifacts';
 import { AgentManager } from './agents';
-import { APP_NAME, DEFAULT_CWD, HOST, PORT } from './config';
+import {
+  APP_NAME,
+  DEFAULT_CWD,
+  HOST,
+  INITIAL_COLS,
+  INITIAL_ROWS,
+  PI_COMMAND,
+  PORT,
+  TERMINAL_BUFFER_LIMIT,
+  USER_SHELL,
+} from './config';
 import { readJsonBody, readRequestBody, sendBuffer, sendJson, sendText } from './utils';
+import { DirectWorkspaceProvider, GitWorktreeProvider } from './workspaces';
+import { ZellijBackend } from './zellij';
 
 const publicDir = resolve(__dirname, '../public');
-const agentManager = new AgentManager();
+const artifactStore = new LocalArtifactStore();
+const agentManager = new AgentManager({
+  sessionBackend: new ZellijBackend({ userShell: USER_SHELL }),
+  workspaceProviders: [new GitWorktreeProvider(), new DirectWorkspaceProvider()],
+  launchCommand: [PI_COMMAND],
+  initialCols: INITIAL_COLS,
+  initialRows: INITIAL_ROWS,
+  terminalBufferLimit: TERMINAL_BUFFER_LIMIT,
+});
 
 const serverInfo: Omit<ServerStatusPayload, 'wsConnected'> = {
   appName: APP_NAME,
@@ -122,12 +142,12 @@ async function handleRequest(req: Parameters<typeof createServer>[0], res: Param
   if (parts[0] === 'artifacts' && parts.length >= 3 && method === 'GET') {
     const agentId = parts[1];
     const relPath = parts.slice(2).join('/');
-    const agent = agentManager.get(agentId);
-    if (!agent || !relPath) {
+    const cwd = agentManager.getCwd(agentId);
+    if (!cwd || !relPath) {
       sendJson(res, 404, { error: 'Artifact not found' });
       return;
     }
-    const { content, contentType } = await readArtifact(agent.cwd, relPath);
+    const { content, contentType } = await artifactStore.read(cwd, relPath);
     sendBuffer(res, 200, content, contentType);
     return;
   }
@@ -168,7 +188,8 @@ async function handleAgentsApi(
   }
 
   const [agentId, section, action] = parts;
-  const agent = agentManager.get(agentId);
+  const agent = agentManager.getSummary(agentId);
+  const cwd = agentManager.getCwd(agentId);
 
   if (parts.length === 1) {
     if (method === 'DELETE') {
@@ -185,7 +206,7 @@ async function handleAgentsApi(
     return;
   }
 
-  if (!agent) {
+  if (!agent || !cwd) {
     sendJson(res, 404, { error: 'Agent not found' });
     return;
   }
@@ -219,7 +240,7 @@ async function handleAgentsApi(
   }
 
   if (section === 'artifacts' && !action && method === 'GET') {
-    const artifacts = await listArtifacts(agent.cwd);
+    const artifacts = await artifactStore.list(cwd);
     sendJson(res, 200, { artifacts });
     return;
   }
@@ -229,7 +250,7 @@ async function handleAgentsApi(
       const contentType = String(req.headers['content-type'] ?? '').toLowerCase();
       const originalName = String(req.headers['x-file-name'] ?? '');
       const body = await readRequestBody(req);
-      const result = await saveUploadedImage(agent.cwd, body, contentType, originalName);
+      const result = await artifactStore.saveImage(cwd, body, contentType, originalName);
       sendJson(res, 201, result);
     } catch (error) {
       sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });

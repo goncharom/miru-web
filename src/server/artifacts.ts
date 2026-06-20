@@ -10,22 +10,65 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/gif': '.gif',
 };
 
-export async function ensureMiruDir(cwd: string): Promise<string> {
+export interface ArtifactReadResult {
+  content: Buffer;
+  contentType: string;
+}
+
+export interface ArtifactStore {
+  list(cwd: string): Promise<ArtifactEntry[]>;
+  read(cwd: string, relPath: string): Promise<ArtifactReadResult>;
+  saveImage(cwd: string, bytes: Buffer, contentType: string, originalName?: string): Promise<UploadImageResult>;
+}
+
+export class LocalArtifactStore implements ArtifactStore {
+  async list(cwd: string): Promise<ArtifactEntry[]> {
+    const root = await ensureMiruDir(cwd);
+    const entries: ArtifactEntry[] = [];
+    await walk(root, root, entries);
+    entries.sort((a, b) => {
+      if (a.kind === 'html' && b.kind !== 'html') return -1;
+      if (a.kind !== 'html' && b.kind === 'html') return 1;
+      return b.mtimeMs - a.mtimeMs || a.relPath.localeCompare(b.relPath);
+    });
+    return entries;
+  }
+
+  async read(cwd: string, relPath: string): Promise<ArtifactReadResult> {
+    const path = resolveArtifactPath(cwd, relPath);
+    const content = await fs.readFile(path);
+    return { content, contentType: contentTypeForPath(path) };
+  }
+
+  async saveImage(cwd: string, bytes: Buffer, contentType: string, originalName?: string): Promise<UploadImageResult> {
+    if (!bytes.length) {
+      throw new Error('Uploaded image was empty');
+    }
+
+    const miruDir = await ensureMiruDir(cwd);
+    const pastedDir = resolve(miruDir, 'pasted');
+    await ensureDirectory(pastedDir);
+
+    const extension = extensionForUpload(contentType, originalName);
+    if (!extension) {
+      throw new Error('Unsupported image type');
+    }
+
+    const fileName = `${formatTimestamp(new Date())}-${Math.random().toString(36).slice(2, 8)}${extension}`;
+    const absolutePath = resolve(pastedDir, fileName);
+    await fs.writeFile(absolutePath, bytes);
+
+    return {
+      relPath: `pasted/${fileName}`,
+      absPath: absolutePath,
+    };
+  }
+}
+
+async function ensureMiruDir(cwd: string): Promise<string> {
   const miruDir = resolve(cwd, '.miru');
   await ensureDirectory(miruDir);
   return miruDir;
-}
-
-export async function listArtifacts(cwd: string): Promise<ArtifactEntry[]> {
-  const root = await ensureMiruDir(cwd);
-  const entries: ArtifactEntry[] = [];
-  await walk(root, root, entries);
-  entries.sort((a, b) => {
-    if (a.kind === 'html' && b.kind !== 'html') return -1;
-    if (a.kind !== 'html' && b.kind === 'html') return 1;
-    return b.mtimeMs - a.mtimeMs || a.relPath.localeCompare(b.relPath);
-  });
-  return entries;
 }
 
 async function walk(root: string, current: string, entries: ArtifactEntry[]): Promise<void> {
@@ -49,7 +92,7 @@ async function walk(root: string, current: string, entries: ArtifactEntry[]): Pr
   }
 }
 
-export function resolveArtifactPath(cwd: string, relPath: string): string {
+function resolveArtifactPath(cwd: string, relPath: string): string {
   const baseDir = resolve(cwd, '.miru');
   const normalizedRel = normalize(decodeURIComponent(relPath)).replace(/^[/\\]+/, '');
   const targetPath = resolve(baseDir, normalizedRel);
@@ -58,36 +101,6 @@ export function resolveArtifactPath(cwd: string, relPath: string): string {
     throw new Error('Invalid artifact path');
   }
   return targetPath;
-}
-
-export async function readArtifact(cwd: string, relPath: string): Promise<{ content: Buffer; contentType: string }> {
-  const path = resolveArtifactPath(cwd, relPath);
-  const content = await fs.readFile(path);
-  return { content, contentType: contentTypeForPath(path) };
-}
-
-export async function saveUploadedImage(cwd: string, bytes: Buffer, contentType: string, originalName?: string): Promise<UploadImageResult> {
-  if (!bytes.length) {
-    throw new Error('Uploaded image was empty');
-  }
-
-  const miruDir = await ensureMiruDir(cwd);
-  const pastedDir = resolve(miruDir, 'pasted');
-  await ensureDirectory(pastedDir);
-
-  const extension = extensionForUpload(contentType, originalName);
-  if (!extension) {
-    throw new Error('Unsupported image type');
-  }
-
-  const fileName = `${formatTimestamp(new Date())}-${Math.random().toString(36).slice(2, 8)}${extension}`;
-  const absolutePath = resolve(pastedDir, fileName);
-  await fs.writeFile(absolutePath, bytes);
-
-  return {
-    relPath: `pasted/${fileName}`,
-    absPath: absolutePath,
-  };
 }
 
 function extensionForUpload(contentType: string, originalName?: string): string | undefined {

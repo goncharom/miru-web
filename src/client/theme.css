@@ -155,12 +155,42 @@ input[type="text"] {
   letter-spacing: 0.04em;
 }
 
-.icon-button {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  font-size: 16px;
-  line-height: 1;
+.pane-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow-x: auto;
+}
+
+.pane-tab {
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.pane-tab.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 700;
+}
+
+.pane-tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .create-agent-form,
@@ -251,6 +281,13 @@ input[type="text"] {
   min-width: 0;
 }
 
+.agent-decorators {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
 .artifact-name {
   align-items: flex-start;
 }
@@ -273,7 +310,6 @@ input[type="text"] {
 .artifact-meta,
 .muted-text,
 .path-text,
-.checkbox-row,
 .selected-agent-status,
 .folder-tag {
   font-size: 11px;
@@ -397,12 +433,6 @@ input[type="text"] {
   background: rgba(255, 255, 255, 0.03);
 }
 
-.checkbox-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .upload-actions {
   display: flex;
   gap: 6px;
@@ -451,20 +481,10 @@ input[type="text"] {
   margin-left: 24px;
 }
 
-.artifact-actions a,
 .artifact-actions button {
   padding: 2px 6px;
   border-radius: 6px;
   font-size: 10px;
-}
-
-.artifact-actions a {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border-strong);
-  background: var(--surface-2);
-  color: var(--fg);
-  text-decoration: none;
 }
 
 .kind-pill {

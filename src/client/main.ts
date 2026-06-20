@@ -1,8 +1,5 @@
-import { FitAddon } from '@xterm/addon-fit';
-import { Terminal } from '@xterm/xterm';
 import './theme.css';
 import type {
-  AgentBufferPayload,
   AgentSummary,
   ArtifactEntry,
   ClientEvent,
@@ -11,24 +8,14 @@ import type {
   ServerStatusPayload,
   UploadImageResult,
 } from '../shared/protocol';
+import { ExtensionRegistry, registerBuiltInExtensions, type ClientContext } from './extensions';
+import { TerminalController } from './terminal';
 
 interface LayoutState {
   leftWidth: number;
   rightWidth: number;
   leftCollapsed: boolean;
   rightCollapsed: boolean;
-}
-
-interface TerminalState {
-  terminal: Terminal;
-  fitAddon: FitAddon;
-  container: HTMLDivElement;
-  initialized: boolean;
-  initializing: boolean;
-  queuedChunks: string[];
-  lastSentCols: number;
-  lastSentRows: number;
-  initVersion: number;
 }
 
 const shell = getElement<HTMLDivElement>('shell');
@@ -44,15 +31,8 @@ const selectedAgentDetailEl = getElement<HTMLDivElement>('selected-agent-detail'
 const selectedAgentStatusEl = getElement<HTMLDivElement>('selected-agent-status');
 const terminalStackEl = getElement<HTMLDivElement>('terminal-stack');
 const terminalEmptyEl = getElement<HTMLDivElement>('terminal-empty');
-const artifactListEl = getElement<HTMLDivElement>('artifact-list');
-const chooseImageButton = getElement<HTMLButtonElement>('choose-image');
-const imageInput = getElement<HTMLInputElement>('image-input');
-const pasteTarget = getElement<HTMLDivElement>('paste-target');
-const uploadStatusEl = getElement<HTMLDivElement>('upload-status');
-const uploadedPathRow = getElement<HTMLDivElement>('uploaded-path-row');
-const uploadedPathText = getElement<HTMLDivElement>('uploaded-path-text');
-const copyUploadedPathButton = getElement<HTMLButtonElement>('copy-uploaded-path');
-const insertUploadedPathButton = getElement<HTMLButtonElement>('insert-uploaded-path');
+const rightPaneTabsEl = getElement<HTMLDivElement>('right-pane-tabs');
+const rightPaneContentEl = getElement<HTMLDivElement>('right-pane-content');
 const leftSplitter = getElement<HTMLDivElement>('left-splitter');
 const rightSplitter = getElement<HTMLDivElement>('right-splitter');
 const toggleLeftButton = getElement<HTMLButtonElement>('toggle-left');
@@ -60,113 +40,114 @@ const toggleRightButton = getElement<HTMLButtonElement>('toggle-right');
 
 const layoutStorageKey = 'miru-web-layout';
 const selectedAgentStorageKey = 'miru-web-selected-agent';
+const rightPanelStorageKey = 'miru-web-right-panel';
 
 const state: {
   agents: AgentSummary[];
   selectedAgentId: string | null;
   activityAgentIds: Set<string>;
-  terminals: Map<string, TerminalState>;
   artifacts: ArtifactEntry[];
   layout: LayoutState;
   server: Omit<ServerStatusPayload, 'wsConnected'> | null;
   ws: WebSocket | null;
   wsConnected: boolean;
   uploadedPath: string;
+  uploadStatusMessage: string;
+  uploadStatusError: boolean;
   artifactRequestToken: number;
-  resizeObserver: ResizeObserver | null;
+  activeRightPanelId: string | null;
   agentsRenderQueued: boolean;
+  activePanelCleanup: (() => void) | null;
 } = {
   agents: [],
   selectedAgentId: window.localStorage.getItem(selectedAgentStorageKey),
   activityAgentIds: new Set<string>(),
-  terminals: new Map<string, TerminalState>(),
   artifacts: [],
   layout: loadLayout(),
   server: null,
   ws: null,
   wsConnected: false,
   uploadedPath: '',
+  uploadStatusMessage: 'Select an agent to upload.',
+  uploadStatusError: false,
   artifactRequestToken: 0,
-  resizeObserver: null,
+  activeRightPanelId: window.localStorage.getItem(rightPanelStorageKey),
   agentsRenderQueued: false,
+  activePanelCleanup: null,
 };
 
+const registry = new ExtensionRegistry();
+const terminals = new TerminalController(terminalStackEl, {
+  send: sendClientEvent,
+  loadBuffer: async (agentId) => {
+    const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/terminal-buffer`);
+    const body = (await response.json().catch(() => null)) as { data?: string } | null;
+    return body?.data ?? '';
+  },
+});
+
+const ctx: ClientContext = {
+  getState: () => ({
+    agents: [...state.agents],
+    selectedAgentId: state.selectedAgentId,
+    artifacts: [...state.artifacts],
+    wsConnected: state.wsConnected,
+  }),
+  getSelectedAgent: () => selectedAgent(),
+  terminals: {
+    insertText: (text) => {
+      const agentId = state.selectedAgentId;
+      if (!agentId) return;
+      terminals.insertText(agentId, text);
+    },
+  },
+  selectAgent,
+  copyText,
+  setStatus: (message, isError = false) => setUploadStatus(message, isError),
+};
+
+registerBuiltInExtensions(registry, ctx, {
+  getArtifacts: () => state.artifacts,
+  getUploadedPath: () => state.uploadedPath,
+  getUploadStatus: () => ({
+    message: state.uploadStatusMessage,
+    isError: state.uploadStatusError,
+  }),
+  uploadImage,
+});
 applyLayout();
 attachUiEvents();
 connectWebSocket();
+render();
 window.setInterval(() => {
   if (state.selectedAgentId) {
     runTask(loadArtifacts({ quiet: true }));
   }
 }, 2500);
+window.addEventListener('beforeunload', () => terminals.dispose());
 
 function attachUiEvents(): void {
   createAgentForm.addEventListener('submit', (event) => {
     event.preventDefault();
-    runTask(createAgent());
-  });
-
-  chooseImageButton.addEventListener('click', () => {
-    imageInput.click();
-  });
-
-  imageInput.addEventListener('change', () => {
-    const file = imageInput.files?.[0];
-    imageInput.value = '';
-    if (file) runTask(uploadImage(file));
-  });
-
-  pasteTarget.addEventListener('paste', (event) => {
-    const items = Array.from(event.clipboardData?.items ?? []);
-    const imageItem = items.find((item) => item.type.startsWith('image/'));
-    if (!imageItem) {
-      setUploadStatus('Clipboard does not contain an image.', true);
-      return;
-    }
-    const file = imageItem.getAsFile();
-    if (!file) {
-      setUploadStatus('Could not read image from clipboard.', true);
-      return;
-    }
-    event.preventDefault();
-    runTask(uploadImage(file));
-  });
-
-  copyUploadedPathButton.addEventListener('click', async () => {
-    if (!state.uploadedPath) return;
-    const copied = await copyText(state.uploadedPath);
-    setUploadStatus(copied ? 'Copied full path.' : 'Could not copy path.', !copied);
-  });
-
-  insertUploadedPathButton.addEventListener('click', () => {
-    if (!state.uploadedPath) return;
-    insertPathIntoTerminal(state.uploadedPath);
+    runTask(submitCreateAgentForm());
   });
 
   toggleLeftButton.addEventListener('click', () => {
     state.layout.leftCollapsed = !state.layout.leftCollapsed;
     applyLayout();
     persistLayout();
-    scheduleFitSelectedTerminal();
+    terminals.fitSelected();
   });
 
   toggleRightButton.addEventListener('click', () => {
     state.layout.rightCollapsed = !state.layout.rightCollapsed;
     applyLayout();
     persistLayout();
-    scheduleFitSelectedTerminal();
+    terminals.fitSelected();
   });
 
   attachSplitterDrag(leftSplitter, 'left');
   attachSplitterDrag(rightSplitter, 'right');
-  window.addEventListener('resize', () => scheduleFitSelectedTerminal());
-
-  if (typeof ResizeObserver !== 'undefined') {
-    state.resizeObserver = new ResizeObserver(() => {
-      scheduleFitSelectedTerminal();
-    });
-    state.resizeObserver.observe(terminalStackEl);
-  }
 }
 
 function connectWebSocket(): void {
@@ -198,58 +179,38 @@ function handleServerEvent(event: ServerEvent): void {
       if (!agentCwdInput.value) {
         agentCwdInput.value = suggestedCwd();
       }
+      terminals.invalidateAll();
       replaceAgents(event.agents);
       renderServerStatus();
-      if (state.selectedAgentId) {
-        const terminalState = state.terminals.get(state.selectedAgentId);
-        if (terminalState) {
-          terminalState.initialized = false;
-          terminalState.initializing = false;
-          terminalState.queuedChunks = [];
-          terminalState.initVersion += 1;
-        }
-        runTask(ensureTerminalReady(state.selectedAgentId));
-        runTask(loadArtifacts({ quiet: true }));
-      }
       return;
     case 'agents':
       replaceAgents(event.agents);
       return;
-    case 'terminal_data': {
+    case 'terminal_data':
       if (event.agentId !== state.selectedAgentId) {
         markAgentActivity(event.agentId);
       }
-      const terminalState = state.terminals.get(event.agentId);
-      if (terminalState?.initialized) {
-        terminalState.terminal.write(event.data);
-      } else if (terminalState?.initializing) {
-        terminalState.queuedChunks.push(event.data);
-      }
+      terminals.handleOutput(event.agentId, event.data);
       return;
-    }
     case 'terminal_exit':
       if (event.agentId !== state.selectedAgentId) {
         markAgentActivity(event.agentId);
       }
       return;
     case 'clipboard_copy':
-      if (event.agentId === state.selectedAgentId) {
-        runTask(copyTerminalClipboard(event.text));
-      }
+      runTask(terminals.handleClipboardCopy(event.agentId, event.text));
       return;
   }
 }
 
 function replaceAgents(agents: AgentSummary[]): void {
-  state.agents = agents;
+  const previousSelectedId = state.selectedAgentId;
+  state.agents = [...agents].sort((a, b) => a.createdAt - b.createdAt);
+  terminals.prune(state.agents.map((agent) => agent.id));
 
-  for (const existingId of Array.from(state.terminals.keys())) {
-    if (!state.agents.some((agent) => agent.id === existingId)) {
-      const terminalState = state.terminals.get(existingId);
-      terminalState?.terminal.dispose();
-      terminalState?.container.remove();
-      state.terminals.delete(existingId);
-      state.activityAgentIds.delete(existingId);
+  for (const agentId of Array.from(state.activityAgentIds)) {
+    if (!state.agents.some((agent) => agent.id === agentId)) {
+      state.activityAgentIds.delete(agentId);
     }
   }
 
@@ -261,15 +222,32 @@ function replaceAgents(agents: AgentSummary[]): void {
     state.selectedAgentId = state.agents[0].id;
   }
 
+  if (previousSelectedId !== state.selectedAgentId) {
+    hideUploadedPath();
+    if (state.selectedAgentId) {
+      state.activityAgentIds.delete(state.selectedAgentId);
+    }
+  }
+
   persistSelectedAgent();
   renderAgents();
   renderSelectedAgentHeader();
   renderTerminalSelection();
-  runTask(ensureTerminalReady(state.selectedAgentId));
+  renderRightPane();
+  terminals.select(state.selectedAgentId);
+
+  if (state.selectedAgentId) {
+    runTask(
+      terminals.ensure(state.selectedAgentId).then(() => {
+        terminals.select(state.selectedAgentId);
+      }),
+    );
+  }
+
   runTask(loadArtifacts({ quiet: true }));
 }
 
-async function createAgent(): Promise<void> {
+async function submitCreateAgentForm(): Promise<void> {
   const cwd = agentCwdInput.value.trim();
   const name = agentNameInput.value.trim();
   const workspaceName = agentWorkspaceInput.value.trim();
@@ -280,35 +258,36 @@ async function createAgent(): Promise<void> {
     return;
   }
 
-  const payload: CreateAgentInput = {
-    cwd,
-    name: name || undefined,
-    workspaceName: workspaceName || undefined,
-  };
+  try {
+    await createAgentWithInput({
+      cwd,
+      name: name || undefined,
+      workspaceName: workspaceName || undefined,
+    });
+    createAgentErrorEl.textContent = '';
+    agentNameInput.value = '';
+    agentWorkspaceInput.value = '';
+  } catch (error) {
+    createAgentErrorEl.textContent = error instanceof Error ? error.message : String(error);
+  }
+}
 
+async function createAgentWithInput(input: CreateAgentInput): Promise<void> {
   const response = await fetch('/api/agents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(input),
   });
 
-  const body = await response.json().catch(() => null);
+  const body = (await response.json().catch(() => null)) as { agent?: AgentSummary; error?: string } | null;
   if (!response.ok || !body?.agent) {
-    createAgentErrorEl.textContent = body?.error ?? 'Could not create agent.';
-    return;
+    throw new Error(body?.error ?? 'Could not create agent.');
   }
 
-  createAgentErrorEl.textContent = '';
-  agentNameInput.value = '';
-  agentWorkspaceInput.value = '';
   state.selectedAgentId = body.agent.id;
   persistSelectedAgent();
   state.activityAgentIds.delete(body.agent.id);
-  renderAgents();
-  renderSelectedAgentHeader();
-  renderTerminalSelection();
-  await ensureTerminalReady(body.agent.id);
-  await loadArtifacts({ quiet: true });
+  replaceAgents([...state.agents.filter((agent) => agent.id !== body.agent!.id), body.agent]);
 }
 
 function renderAgents(): void {
@@ -321,6 +300,8 @@ function renderAgents(): void {
     agentListEl.append(empty);
     return;
   }
+
+  const decorators = registry.getAgentDecorators();
 
   for (const agent of state.agents) {
     const row = document.createElement('div');
@@ -352,7 +333,19 @@ function renderAgents(): void {
     tagEl.textContent = agent.folderTag;
     tagEl.title = agent.cwd;
 
+    const decoratorsEl = document.createElement('div');
+    decoratorsEl.className = 'agent-decorators';
+    for (const decorator of decorators) {
+      const decoration = decorator.render(agent, ctx);
+      if (decoration) {
+        decoratorsEl.append(decoration);
+      }
+    }
+
     nameLine.append(statusDot, activityDot, nameEl, tagEl);
+    if (decoratorsEl.childElementCount > 0) {
+      nameLine.append(decoratorsEl);
+    }
 
     const subline = document.createElement('div');
     subline.className = 'agent-subline';
@@ -386,7 +379,12 @@ async function selectAgent(agentId: string | null): Promise<void> {
   renderAgents();
   renderSelectedAgentHeader();
   renderTerminalSelection();
-  await ensureTerminalReady(agentId);
+  renderRightPane();
+  terminals.select(agentId);
+  if (agentId) {
+    await terminals.ensure(agentId);
+    terminals.select(agentId);
+  }
   await loadArtifacts({ quiet: true });
 }
 
@@ -405,195 +403,7 @@ function renderSelectedAgentHeader(): void {
 }
 
 function renderTerminalSelection(): void {
-  const selectedId = state.selectedAgentId;
-  terminalEmptyEl.style.display = selectedId ? 'none' : 'block';
-
-  for (const [agentId, terminalState] of state.terminals) {
-    terminalState.container.classList.toggle('active', agentId === selectedId);
-  }
-
-  if (selectedId) {
-    scheduleFitSelectedTerminal();
-  }
-}
-
-async function ensureTerminalReady(agentId: string | null): Promise<void> {
-  if (!agentId) return;
-
-  const terminalState = ensureTerminalState(agentId);
-  if (terminalState.initialized || terminalState.initializing) {
-    if (terminalState.initialized && state.selectedAgentId === agentId) {
-      focusTerminal(agentId);
-    }
-    return;
-  }
-
-  terminalState.initializing = true;
-  terminalState.queuedChunks = [];
-  const initVersion = ++terminalState.initVersion;
-
-  try {
-    const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/terminal-buffer`);
-    const body = (await response.json()) as AgentBufferPayload;
-    if (terminalState.initVersion !== initVersion) {
-      return;
-    }
-    terminalState.terminal.reset();
-    terminalState.terminal.write(body.data || '');
-    for (const chunk of terminalState.queuedChunks) {
-      terminalState.terminal.write(chunk);
-    }
-    terminalState.initialized = true;
-    terminalState.queuedChunks = [];
-    if (state.selectedAgentId === agentId) {
-      focusTerminal(agentId);
-    }
-  } finally {
-    if (terminalState.initVersion === initVersion) {
-      terminalState.initializing = false;
-    }
-  }
-}
-
-function ensureTerminalState(agentId: string): TerminalState {
-  const existing = state.terminals.get(agentId);
-  if (existing) return existing;
-
-  const container = document.createElement('div');
-  container.className = 'terminal-instance';
-  terminalStackEl.append(container);
-
-  const terminal = new Terminal({
-    cursorBlink: true,
-    fontSize: 12,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-    theme: {
-      background: '#000000',
-      foreground: '#ffffff',
-      cursor: '#ffffff',
-      selectionBackground: 'rgba(255, 255, 255, 0.25)',
-    },
-    scrollback: 10000,
-    allowTransparency: false,
-  });
-  const fitAddon = new FitAddon();
-  terminal.loadAddon(fitAddon);
-  terminal.open(container);
-  attachTerminalKeyHandler(terminal, agentId);
-  attachTerminalPasteHandler(container, terminal, agentId);
-  terminal.onData((data) => {
-    sendClientEvent({ type: 'terminal_input', agentId, data });
-  });
-  terminal.onBinary((data) => {
-    sendClientEvent({ type: 'terminal_binary', agentId, dataBase64: window.btoa(data) });
-  });
-
-  const terminalState: TerminalState = {
-    terminal,
-    fitAddon,
-    container,
-    initialized: false,
-    initializing: false,
-    queuedChunks: [],
-    lastSentCols: 0,
-    lastSentRows: 0,
-    initVersion: 0,
-  };
-
-  state.terminals.set(agentId, terminalState);
-  return terminalState;
-}
-
-function attachTerminalKeyHandler(terminal: Terminal, agentId: string): void {
-  terminal.attachCustomKeyEventHandler((event) => {
-    if (event.key !== 'Enter' || !event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
-      return true;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (event.type === 'keydown') {
-      sendClientEvent({
-        type: 'terminal_input',
-        agentId,
-        data: '\u001b[13;2u',
-      });
-    }
-
-    return false;
-  });
-}
-
-function attachTerminalPasteHandler(container: HTMLDivElement, terminal: Terminal, agentId: string): void {
-  container.addEventListener(
-    'paste',
-    (event) => {
-      const text = event.clipboardData?.getData('text/plain');
-      if (!text || !/[\r\n]/.test(text)) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      sendBracketedTerminalPaste(agentId, text);
-      terminal.focus();
-    },
-    { capture: true },
-  );
-}
-
-function sendBracketedTerminalPaste(agentId: string, text: string): void {
-  const normalized = text.replace(/\r?\n/g, '\r');
-  sendClientEvent({
-    type: 'terminal_input',
-    agentId,
-    data: `\u001b[200~${normalized}\u001b[201~`,
-  });
-}
-
-function focusTerminal(agentId: string): void {
-  const terminalState = state.terminals.get(agentId);
-  if (!terminalState) return;
-  renderTerminalSelection();
-  scheduleFitSelectedTerminal();
-  terminalState.terminal.focus();
-}
-
-function fitSelectedTerminal(): void {
-  const agentId = state.selectedAgentId;
-  if (!agentId) return;
-  const terminalState = state.terminals.get(agentId);
-  if (!terminalState) return;
-  if (!terminalState.container.classList.contains('active')) return;
-
-  const rect = terminalState.container.getBoundingClientRect();
-  if (rect.width < 32 || rect.height < 32) return;
-
-  terminalState.fitAddon.fit();
-
-  if (
-    terminalState.terminal.cols === terminalState.lastSentCols &&
-    terminalState.terminal.rows === terminalState.lastSentRows
-  ) {
-    return;
-  }
-
-  terminalState.lastSentCols = terminalState.terminal.cols;
-  terminalState.lastSentRows = terminalState.terminal.rows;
-
-  sendClientEvent({
-    type: 'terminal_resize',
-    agentId,
-    cols: terminalState.terminal.cols,
-    rows: terminalState.terminal.rows,
-  });
-}
-
-function scheduleFitSelectedTerminal(): void {
-  requestAnimationFrame(() => {
-    fitSelectedTerminal();
-    window.setTimeout(() => fitSelectedTerminal(), 60);
-    window.setTimeout(() => fitSelectedTerminal(), 180);
-  });
+  terminalEmptyEl.style.display = state.selectedAgentId ? 'none' : 'block';
 }
 
 async function deleteAgent(agentId: string): Promise<void> {
@@ -601,131 +411,112 @@ async function deleteAgent(agentId: string): Promise<void> {
   if (!agent) return;
   if (!window.confirm(`Delete agent ${agent.name}? This kills its zellij session.`)) return;
 
+  try {
+    const warning = await deleteAgentRequest(agentId);
+    if (warning) {
+      window.alert(warning);
+    }
+    if (state.selectedAgentId === agentId) {
+      state.selectedAgentId = null;
+      persistSelectedAgent();
+    }
+    replaceAgents(state.agents.filter((item) => item.id !== agentId));
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function deleteAgentRequest(agentId: string): Promise<string | undefined> {
   const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}`, {
     method: 'DELETE',
   });
-  const body = await response.json().catch(() => null);
+  const body = (await response.json().catch(() => null)) as { ok?: boolean; warning?: string; error?: string } | null;
 
   if (!response.ok) {
-    window.alert(body?.error ?? 'Could not delete agent.');
-    return;
+    throw new Error(body?.error ?? 'Could not delete agent.');
   }
 
-  if (body?.warning) {
-    window.alert(body.warning);
-  }
+  return body?.warning;
+}
 
-  if (state.selectedAgentId === agentId) {
-    state.selectedAgentId = null;
-    persistSelectedAgent();
+async function listArtifactsForAgent(agentId: string): Promise<ArtifactEntry[]> {
+  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/artifacts`);
+  const body = (await response.json().catch(() => null)) as { artifacts?: ArtifactEntry[]; error?: string } | null;
+  if (!response.ok) {
+    throw new Error(body?.error ?? 'Could not load artifacts.');
   }
+  return Array.isArray(body?.artifacts) ? body.artifacts : [];
 }
 
 async function loadArtifacts(options: { quiet: boolean }): Promise<void> {
   const agent = selectedAgent();
   if (!agent) {
     state.artifacts = [];
-    renderArtifacts();
-    setUploadStatus('Select an agent to upload.', false);
+    updateUploadStatus('Select an agent to upload.', false);
+    renderRightPane();
     return;
   }
 
   const requestToken = ++state.artifactRequestToken;
-  const response = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/artifacts`);
-  if (!response.ok) {
-    if (!options.quiet) {
-      setUploadStatus('Could not load artifacts.', true);
+
+  try {
+    const artifacts = await listArtifactsForAgent(agent.id);
+    if (requestToken !== state.artifactRequestToken) return;
+    state.artifacts = artifacts;
+    if (!state.uploadedPath) {
+      updateUploadStatus('Ready for image upload.', false);
     }
-    return;
+  } catch {
+    if (!options.quiet) {
+      updateUploadStatus('Could not load artifacts.', true);
+    }
   }
 
-  const body = await response.json().catch(() => null);
-  if (requestToken !== state.artifactRequestToken) return;
-  state.artifacts = Array.isArray(body?.artifacts) ? body.artifacts : [];
-  renderArtifacts();
-  if (!state.uploadedPath) {
-    setUploadStatus('Ready for image upload.', false);
-  }
+  renderRightPane();
 }
 
-function renderArtifacts(): void {
-  artifactListEl.innerHTML = '';
-  const agent = selectedAgent();
-  if (!agent) {
+function renderRightPane(): void {
+  const panels = registry.getPanels('right-tab');
+
+  rightPaneTabsEl.innerHTML = '';
+  if (panels.length === 0) {
+    cleanupActivePanel();
+    rightPaneContentEl.innerHTML = '';
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = 'Select an agent to browse .miru artifacts.';
-    artifactListEl.append(empty);
+    empty.textContent = 'No panels available.';
+    rightPaneContentEl.append(empty);
     return;
   }
 
-  const entries = state.artifacts;
-  if (entries.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'No artifacts yet.';
-    artifactListEl.append(empty);
+  if (!state.activeRightPanelId || !panels.some((panel) => panel.id === state.activeRightPanelId)) {
+    state.activeRightPanelId = panels[0].id;
+    persistActiveRightPanel();
+  }
+
+  for (const panel of panels) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `pane-tab${panel.id === state.activeRightPanelId ? ' selected' : ''}`;
+    button.textContent = panel.title;
+    button.addEventListener('click', () => {
+      state.activeRightPanelId = panel.id;
+      persistActiveRightPanel();
+      renderRightPane();
+    });
+    rightPaneTabsEl.append(button);
+  }
+
+  const activePanel = panels.find((panel) => panel.id === state.activeRightPanelId);
+  cleanupActivePanel();
+  rightPaneContentEl.innerHTML = '';
+
+  if (!activePanel) {
     return;
   }
 
-  for (const entry of entries) {
-    const row = document.createElement('div');
-    row.className = 'artifact-row';
-
-    const main = document.createElement('div');
-    main.className = 'artifact-row-main';
-
-    const nameLine = document.createElement('div');
-    nameLine.className = 'artifact-name';
-
-    const kind = document.createElement('span');
-    kind.className = 'kind-pill';
-    kind.textContent = entry.kind;
-
-    const path = document.createElement('span');
-    path.className = 'artifact-path';
-    path.textContent = entry.relPath;
-    path.title = entry.absPath;
-
-    nameLine.append(kind, path);
-
-    const meta = document.createElement('div');
-    meta.className = 'artifact-meta';
-    meta.textContent = new Date(entry.mtimeMs).toLocaleString();
-
-    main.append(nameLine, meta);
-
-    const actions = document.createElement('div');
-    actions.className = 'artifact-actions';
-
-    if (entry.kind === 'html') {
-      const openLink = document.createElement('a');
-      openLink.href = `/artifacts/${encodeURIComponent(agent.id)}/${encodeArtifactPath(entry.relPath)}`;
-      openLink.target = '_blank';
-      openLink.rel = 'noreferrer';
-      openLink.textContent = 'Open';
-      actions.append(openLink);
-    }
-
-    const copyButton = document.createElement('button');
-    copyButton.type = 'button';
-    copyButton.textContent = 'Copy path';
-    copyButton.addEventListener('click', async () => {
-      const copied = await copyText(entry.absPath);
-      setUploadStatus(copied ? 'Copied full path.' : 'Could not copy path.', !copied);
-    });
-
-    const insertButton = document.createElement('button');
-    insertButton.type = 'button';
-    insertButton.textContent = 'Insert path';
-    insertButton.addEventListener('click', () => {
-      insertPathIntoTerminal(entry.absPath);
-    });
-
-    actions.append(copyButton, insertButton);
-    row.append(main, actions);
-    artifactListEl.append(row);
-  }
+  const cleanup = activePanel.render(rightPaneContentEl, ctx);
+  state.activePanelCleanup = typeof cleanup === 'function' ? cleanup : null;
 }
 
 async function uploadImage(file: File): Promise<void> {
@@ -735,10 +526,23 @@ async function uploadImage(file: File): Promise<void> {
     return;
   }
 
-  setUploadStatus('Uploading image…', false);
+  updateUploadStatus('Uploading image…', false);
   hideUploadedPath();
+  renderRightPane();
 
-  const response = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/artifacts/upload-image`, {
+  try {
+    const result = await uploadImageForAgent(agent.id, file);
+    state.uploadedPath = result.absPath;
+    updateUploadStatus('Saved image.', false);
+    await loadArtifacts({ quiet: true });
+  } catch (error) {
+    updateUploadStatus(error instanceof Error ? error.message : 'Upload failed.', true);
+    renderRightPane();
+  }
+}
+
+async function uploadImageForAgent(agentId: string, file: File): Promise<UploadImageResult> {
+  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/artifacts/upload-image`, {
     method: 'POST',
     headers: {
       'Content-Type': file.type,
@@ -749,36 +553,26 @@ async function uploadImage(file: File): Promise<void> {
 
   const body = (await response.json().catch(() => null)) as UploadImageResult | { error?: string } | null;
   if (!response.ok || !body || typeof (body as UploadImageResult).absPath !== 'string') {
-    setUploadStatus((body as { error?: string } | null)?.error ?? 'Upload failed.', true);
-    return;
+    throw new Error((body as { error?: string } | null)?.error ?? 'Upload failed.');
   }
 
-  const result = body as UploadImageResult;
-  state.uploadedPath = result.absPath;
-  uploadedPathText.textContent = result.absPath;
-  uploadedPathRow.hidden = false;
-  setUploadStatus('Saved image.', false);
-  await loadArtifacts({ quiet: true });
+  return body as UploadImageResult;
 }
 
 function hideUploadedPath(): void {
   state.uploadedPath = '';
-  uploadedPathText.textContent = '';
-  uploadedPathRow.hidden = true;
 }
 
-function setUploadStatus(message: string, isError: boolean): void {
-  uploadStatusEl.textContent = message;
-  uploadStatusEl.style.color = isError ? 'var(--danger)' : '';
+function updateUploadStatus(message: string, isError: boolean): void {
+  state.uploadStatusMessage = message;
+  state.uploadStatusError = isError;
 }
 
-function insertPathIntoTerminal(path: string): void {
-  const agentId = state.selectedAgentId;
-  if (!agentId) return;
-  sendClientEvent({ type: 'terminal_input', agentId, data: path });
-  setUploadStatus('Inserted path into terminal input.', false);
-  const terminalState = state.terminals.get(agentId);
-  terminalState?.terminal.focus();
+function setUploadStatus(message: string, isError = false): void {
+  updateUploadStatus(message, isError);
+  if (state.activeRightPanelId === 'artifacts') {
+    renderRightPane();
+  }
 }
 
 function sendClientEvent(event: ClientEvent): void {
@@ -800,6 +594,14 @@ function scheduleRenderAgents(): void {
     state.agentsRenderQueued = false;
     renderAgents();
   });
+}
+
+function render(): void {
+  renderServerStatus();
+  renderAgents();
+  renderSelectedAgentHeader();
+  renderTerminalSelection();
+  renderRightPane();
 }
 
 function renderServerStatus(): void {
@@ -824,6 +626,14 @@ function persistSelectedAgent(): void {
     window.localStorage.setItem(selectedAgentStorageKey, state.selectedAgentId);
   } else {
     window.localStorage.removeItem(selectedAgentStorageKey);
+  }
+}
+
+function persistActiveRightPanel(): void {
+  if (state.activeRightPanelId) {
+    window.localStorage.setItem(rightPanelStorageKey, state.activeRightPanelId);
+  } else {
+    window.localStorage.removeItem(rightPanelStorageKey);
   }
 }
 
@@ -878,7 +688,7 @@ function attachSplitterDrag(splitter: HTMLDivElement, side: 'left' | 'right'): v
         state.layout.rightWidth = clamp(shellRect.right - moveEvent.clientX, 240, Math.max(280, maxWidth));
       }
       applyLayout();
-      scheduleFitSelectedTerminal();
+      terminals.fitSelected();
     };
 
     const onUp = () => {
@@ -886,7 +696,7 @@ function attachSplitterDrag(splitter: HTMLDivElement, side: 'left' | 'right'): v
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       persistLayout();
-      scheduleFitSelectedTerminal();
+      terminals.fitSelected();
     };
 
     window.addEventListener('mousemove', onMove);
@@ -894,23 +704,11 @@ function attachSplitterDrag(splitter: HTMLDivElement, side: 'left' | 'right'): v
   });
 }
 
-function encodeArtifactPath(relPath: string): string {
-  return relPath
-    .split('/')
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-async function copyTerminalClipboard(text: string): Promise<void> {
-  const copied = await copyText(text);
-  if (!copied) {
-    console.warn('Could not copy terminal selection to clipboard.');
+function cleanupActivePanel(): void {
+  const cleanup = state.activePanelCleanup;
+  state.activePanelCleanup = null;
+  if (cleanup) {
+    cleanup();
   }
 }
 
