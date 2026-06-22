@@ -2,18 +2,27 @@
 
 :root {
   color-scheme: dark;
-  --bg: #000;
-  --surface: #000;
-  --surface-2: #000;
-  --surface-3: #000;
-  --border: #fff;
-  --border-strong: #fff;
-  --fg: #fff;
-  --muted: #cfcfcf;
-  --accent: #fff;
-  --danger: #ff7f8f;
-  --success: #7ee4a6;
-  --splitter: #000;
+  --black: #000000;
+  --bone: #eae1d0;
+  --onyx: #12110e;
+  --tiger-flame: #f05d23;
+  --dusty-lavender: #70566d;
+  --bg: var(--black);
+  --surface: var(--onyx);
+  --surface-2: var(--onyx);
+  --surface-3: var(--black);
+  --border: rgba(234, 225, 208, 0.14);
+  --border-strong: rgba(234, 225, 208, 0.22);
+  --fg: var(--bone);
+  --muted: rgba(234, 225, 208, 0.62);
+  --accent: var(--tiger-flame);
+  --danger: var(--tiger-flame);
+  --success: var(--bone);
+  --splitter: var(--black);
+  --accent-soft: rgba(240, 93, 35, 0.14);
+  --muted-soft: rgba(234, 225, 208, 0.05);
+  --selected-soft: rgba(240, 93, 35, 0.16);
+  --selection-soft: rgba(234, 225, 208, 0.18);
   --left-pane-width: 280px;
   --right-pane-width: 360px;
   --splitter-width: 12px;
@@ -52,7 +61,7 @@ button {
 }
 
 button:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--accent-soft);
 }
 
 button:disabled {
@@ -69,6 +78,11 @@ input[type="text"] {
   color: var(--fg);
 }
 
+input[type="text"]::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 .topbar {
   height: var(--topbar-height);
   display: flex;
@@ -76,7 +90,7 @@ input[type="text"] {
   justify-content: space-between;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
-  background: #000;
+  background: var(--bg);
 }
 
 .brand {
@@ -130,29 +144,7 @@ input[type="text"] {
 .pane-center {
   display: flex;
   flex-direction: column;
-  background: #000;
-}
-
-.pane-header,
-.selected-agent-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-}
-
-.pane-header-left {
-  padding-right: 6px;
-}
-
-.pane-title {
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  background: var(--bg);
 }
 
 .pane-tabs {
@@ -162,6 +154,10 @@ input[type="text"] {
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
   overflow-x: auto;
+}
+
+.pane-tabs:empty {
+  display: none;
 }
 
 .pane-tab {
@@ -174,7 +170,7 @@ input[type="text"] {
 .pane-tab.selected {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
+  color: var(--bg);
   font-weight: 700;
 }
 
@@ -216,12 +212,13 @@ input[type="text"] {
 .primary-button {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
+  color: var(--bg);
   font-weight: 700;
 }
 
 .primary-button:hover {
-  background: #fff;
+  background: var(--accent);
+  opacity: 0.92;
 }
 
 .create-agent-button {
@@ -260,11 +257,11 @@ input[type="text"] {
 
 .agent-row:hover,
 .artifact-row:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--muted-soft);
 }
 
 .agent-row.selected {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--selected-soft);
 }
 
 .agent-row-main,
@@ -306,11 +303,9 @@ input[type="text"] {
 }
 
 .agent-subline,
-.selected-agent-detail,
 .artifact-meta,
 .muted-text,
 .path-text,
-.selected-agent-status,
 .folder-tag {
   font-size: 11px;
   color: var(--muted);
@@ -336,7 +331,7 @@ input[type="text"] {
 }
 
 .status-starting {
-  background: #f7c96d;
+  background: var(--dusty-lavender);
 }
 
 .status-error,
@@ -362,23 +357,11 @@ input[type="text"] {
   color: var(--danger);
 }
 
-.selected-agent-header {
-  min-height: 42px;
-}
-
-.selected-agent-name {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.selected-agent-meta {
-  min-width: 0;
-}
-
 .terminal-stack {
   flex: 1;
   min-height: 0;
   position: relative;
+  background: var(--bg);
 }
 
 .terminal-instance {
@@ -399,6 +382,7 @@ input[type="text"] {
   color: var(--muted);
   font-size: 12px;
   pointer-events: none;
+  z-index: 1;
 }
 
 .xterm {
@@ -416,7 +400,7 @@ input[type="text"] {
 }
 
 .splitter.dragging {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--muted-soft);
 }
 
 .splitter-toggle {
@@ -430,7 +414,7 @@ input[type="text"] {
 }
 
 .splitter-toggle:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--muted-soft);
 }
 
 .upload-actions {

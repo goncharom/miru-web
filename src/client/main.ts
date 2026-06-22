@@ -26,9 +26,6 @@ const agentCwdInput = getElement<HTMLInputElement>('agent-cwd');
 const agentNameInput = getElement<HTMLInputElement>('agent-name');
 const agentWorkspaceInput = getElement<HTMLInputElement>('agent-workspace');
 const agentListEl = getElement<HTMLDivElement>('agent-list');
-const selectedAgentNameEl = getElement<HTMLDivElement>('selected-agent-name');
-const selectedAgentDetailEl = getElement<HTMLDivElement>('selected-agent-detail');
-const selectedAgentStatusEl = getElement<HTMLDivElement>('selected-agent-status');
 const terminalStackEl = getElement<HTMLDivElement>('terminal-stack');
 const terminalEmptyEl = getElement<HTMLDivElement>('terminal-empty');
 const rightPaneTabsEl = getElement<HTMLDivElement>('right-pane-tabs');
@@ -231,7 +228,6 @@ function replaceAgents(agents: AgentSummary[]): void {
 
   persistSelectedAgent();
   renderAgents();
-  renderSelectedAgentHeader();
   renderTerminalSelection();
   renderRightPane();
   terminals.select(state.selectedAgentId);
@@ -377,7 +373,6 @@ async function selectAgent(agentId: string | null): Promise<void> {
   }
   persistSelectedAgent();
   renderAgents();
-  renderSelectedAgentHeader();
   renderTerminalSelection();
   renderRightPane();
   terminals.select(agentId);
@@ -386,20 +381,6 @@ async function selectAgent(agentId: string | null): Promise<void> {
     terminals.select(agentId);
   }
   await loadArtifacts({ quiet: true });
-}
-
-function renderSelectedAgentHeader(): void {
-  const agent = selectedAgent();
-  if (!agent) {
-    selectedAgentNameEl.textContent = 'No agent selected';
-    selectedAgentDetailEl.textContent = 'Create an agent to begin.';
-    selectedAgentStatusEl.textContent = '—';
-    return;
-  }
-
-  selectedAgentNameEl.textContent = agent.name;
-  selectedAgentDetailEl.textContent = `${agent.cwd} · ${agent.sessionName}`;
-  selectedAgentStatusEl.textContent = agent.status;
 }
 
 function renderTerminalSelection(): void {
@@ -494,17 +475,19 @@ function renderRightPane(): void {
     persistActiveRightPanel();
   }
 
-  for (const panel of panels) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `pane-tab${panel.id === state.activeRightPanelId ? ' selected' : ''}`;
-    button.textContent = panel.title;
-    button.addEventListener('click', () => {
-      state.activeRightPanelId = panel.id;
-      persistActiveRightPanel();
-      renderRightPane();
-    });
-    rightPaneTabsEl.append(button);
+  if (panels.length > 1) {
+    for (const panel of panels) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `pane-tab${panel.id === state.activeRightPanelId ? ' selected' : ''}`;
+      button.textContent = panel.title;
+      button.addEventListener('click', () => {
+        state.activeRightPanelId = panel.id;
+        persistActiveRightPanel();
+        renderRightPane();
+      });
+      rightPaneTabsEl.append(button);
+    }
   }
 
   const activePanel = panels.find((panel) => panel.id === state.activeRightPanelId);
@@ -599,7 +582,6 @@ function scheduleRenderAgents(): void {
 function render(): void {
   renderServerStatus();
   renderAgents();
-  renderSelectedAgentHeader();
   renderTerminalSelection();
   renderRightPane();
 }

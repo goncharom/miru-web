@@ -15,10 +15,6 @@
 
   <main id="shell" class="shell">
     <aside class="pane pane-left">
-      <div class="pane-header pane-header-left">
-        <div class="pane-title">Agents</div>
-      </div>
-
       <form id="create-agent-form" class="create-agent-form">
         <input id="agent-cwd" type="text" name="cwd" placeholder="Folder path" autocomplete="off" spellcheck="false">
         <input id="agent-name" type="text" name="name" placeholder="Name (optional)" autocomplete="off" spellcheck="false">
@@ -37,15 +33,9 @@
     </div>
 
     <section class="pane pane-center">
-      <div class="selected-agent-header">
-        <div class="selected-agent-meta">
-          <div id="selected-agent-name" class="selected-agent-name">No agent selected</div>
-          <div id="selected-agent-detail" class="selected-agent-detail">Create an agent to begin.</div>
-        </div>
-        <div id="selected-agent-status" class="selected-agent-status">—</div>
+      <div id="terminal-stack" class="terminal-stack">
+        <div id="terminal-empty" class="terminal-empty">No agent selected.</div>
       </div>
-      <div id="terminal-stack" class="terminal-stack"></div>
-      <div id="terminal-empty" class="terminal-empty">No agent selected.</div>
     </section>
 
     <div id="right-splitter" class="splitter">
@@ -53,9 +43,6 @@
     </div>
 
     <aside class="pane pane-right">
-      <div class="pane-header">
-        <div class="pane-title">Panels</div>
-      </div>
       <div id="right-pane-tabs" class="pane-tabs"></div>
       <div id="right-pane-content" class="pane-tab-content"></div>
     </aside>
