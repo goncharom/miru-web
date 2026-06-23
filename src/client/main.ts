@@ -76,6 +76,15 @@ const state: {
 const registry = new ExtensionRegistry();
 const terminals = new TerminalController(terminalStackEl, {
   send: sendClientEvent,
+  refresh: async (agentId) => {
+    const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/terminal-refresh`, {
+      method: 'POST',
+    });
+    const body = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    if (!response.ok || !body?.ok) {
+      throw new Error(body?.error ?? 'Could not refresh terminal.');
+    }
+  },
   loadBuffer: async (agentId) => {
     const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/terminal-buffer`);
     const body = (await response.json().catch(() => null)) as { data?: string } | null;

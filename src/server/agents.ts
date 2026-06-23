@@ -70,6 +70,7 @@ interface AgentRecord {
   terminal: TerminalSession;
   deleting: boolean;
   detaching: boolean;
+  suppressedTerminalExitCount: number;
   workspace: WorkspaceHandle | null;
 }
 
@@ -207,6 +208,63 @@ export class AgentManager extends EventEmitter {
     agent.updatedAt = Date.now();
   }
 
+  async refreshTerminal(agentId: string): Promise<void> {
+    const agent = this.requireAgent(agentId);
+    const previousTerminal = agent.terminal;
+    const session: DiscoveredSession = {
+      agentId: agent.id,
+      sessionName: agent.sessionName,
+      name: agent.name,
+      cwd: agent.cwd,
+      lastExitCode: agent.lastExitCode,
+      running: agent.status === 'running' || agent.status === 'starting',
+    };
+
+    agent.suppressedTerminalExitCount += 1;
+    try {
+      previousTerminal.kill();
+    } catch {
+      agent.suppressedTerminalExitCount = Math.max(0, agent.suppressedTerminalExitCount - 1);
+    }
+
+    const ptyProcess = this.sessionBackend.attach(session, {
+      cols: this.initialCols,
+      rows: this.initialRows,
+    });
+
+    agent.terminal = new TerminalSession(
+      ptyProcess,
+      {
+        onData: (data) => {
+          agent.updatedAt = Date.now();
+          this.emit('terminalData', agent.id, data);
+        },
+        onClipboardCopy: (text) => {
+          agent.updatedAt = Date.now();
+          this.emit('clipboardCopy', agent.id, text);
+        },
+        onExit: (exitCode) => {
+          if (agent.suppressedTerminalExitCount > 0) {
+            agent.suppressedTerminalExitCount -= 1;
+            return;
+          }
+          agent.updatedAt = Date.now();
+          agent.lastExitCode = exitCode;
+          if (!agent.deleting && !agent.detaching) {
+            agent.status = exitCode === 0 ? 'exited' : 'error';
+          }
+          this.emit('terminalExit', agent.id, exitCode);
+          if (!agent.detaching) {
+            this.emitAgentsChanged();
+          }
+        },
+      },
+      { bufferLimit: this.terminalBufferLimit },
+    );
+
+    agent.updatedAt = Date.now();
+  }
+
   async delete(agentId: string): Promise<string | undefined> {
     const agent = this.requireAgent(agentId);
     agent.deleting = true;
@@ -280,6 +338,10 @@ export class AgentManager extends EventEmitter {
             this.emit('clipboardCopy', agent.id, text);
           },
           onExit: (exitCode) => {
+            if (agent.suppressedTerminalExitCount > 0) {
+              agent.suppressedTerminalExitCount -= 1;
+              return;
+            }
             agent.updatedAt = Date.now();
             agent.lastExitCode = exitCode;
             if (!agent.deleting && !agent.detaching) {
@@ -295,6 +357,7 @@ export class AgentManager extends EventEmitter {
       ),
       deleting: false,
       detaching: false,
+      suppressedTerminalExitCount: 0,
       workspace,
     };
 

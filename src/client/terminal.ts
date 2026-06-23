@@ -16,6 +16,7 @@ interface TerminalState {
 
 export interface TerminalTransport {
   send(event: ClientEvent): void;
+  refresh(agentId: string): Promise<void>;
   loadBuffer(agentId: string): Promise<string>;
 }
 
@@ -57,6 +58,12 @@ export class TerminalController {
     const initVersion = ++terminalState.initVersion;
 
     try {
+      try {
+        await this.transport.refresh(agentId);
+      } catch (error) {
+        console.warn('Could not refresh terminal mirror before initialization.', error);
+      }
+
       const buffer = await this.transport.loadBuffer(agentId);
       if (terminalState.initVersion !== initVersion) {
         return;

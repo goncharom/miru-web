@@ -234,6 +234,16 @@ async function handleAgentsApi(
     return;
   }
 
+  if (section === 'terminal-refresh' && method === 'POST') {
+    try {
+      await agentManager.refreshTerminal(agentId);
+      sendJson(res, 200, { ok: true });
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+
   if (section === 'terminal-buffer' && method === 'GET') {
     sendJson(res, 200, { data: agentManager.getBuffer(agentId) });
     return;
