@@ -195,7 +195,7 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  write(agentId: string, data: string): void {
+  write(agentId: string, data: string | Buffer): void {
     const agent = this.requireAgent(agentId);
     agent.terminal.write(data);
     agent.updatedAt = Date.now();

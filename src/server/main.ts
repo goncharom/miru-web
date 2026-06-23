@@ -116,7 +116,7 @@ function handleClientEvent(event: ClientEvent): void {
       agentManager.write(event.agentId, event.data);
       return;
     case 'terminal_binary':
-      agentManager.write(event.agentId, Buffer.from(event.dataBase64, 'base64').toString('latin1'));
+      agentManager.write(event.agentId, Buffer.from(event.dataBase64, 'base64'));
       return;
     case 'terminal_resize':
       agentManager.resize(event.agentId, event.cols, event.rows);

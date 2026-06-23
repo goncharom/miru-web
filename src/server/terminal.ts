@@ -60,7 +60,7 @@ export class TerminalSession {
     });
   }
 
-  write(data: string): void {
+  write(data: string | Buffer): void {
     this.ptyProcess.write(data);
   }
 
